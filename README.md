@@ -1,3 +1,6 @@
+![License](https://img.shields.io/github/license/pr-fuzzylogic/mac_software_updater?color=blue)
+![Last Commit](https://img.shields.io/github/last-commit/pr-fuzzylogic/mac_software_updater)
+![Repo Size](https://img.shields.io/github/repo-size/pr-fuzzylogic/mac_software_updater)
 # macOS Maintenance & Migration Toolkit 
 
 A powerful automation tool designed to audit, migrate, and maintain your macOS applications. This project combines **Homebrew**, **Mac App Store CLI (mas)**, and **SwiftBar** to create a unified system for keeping your software clean and up-to-date.
