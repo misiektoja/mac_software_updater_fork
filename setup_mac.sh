@@ -15,12 +15,14 @@ echo "${fg[blue]}██║╚██╔╝██║██╔══██║██
 echo "${fg[blue]}██║ ╚═╝ ██║██║  ██║╚██████╗╚██████╔╝███████║${reset_color}"
 echo "${fg[blue]}╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝${reset_color}"
 echo ""
-echo "${fg[bold]}macOS Maintenance & Migration Toolkit${reset_color}"
-echo "-------------------------------------"
+echo "${fg[cyan]}--------------------------------------------------${reset_color}"
+echo "${fg[bold]}  mac_software_updater${reset_color} v1.0.0"
+echo "${fg[cyan]}  Software Update & Application Migration Toolkit${reset_color}"
+echo "${fg[cyan]}--------------------------------------------------${reset_color}"
 echo "This script will: "
 echo "1. Install necessary tools (Homebrew, mas, SwiftBar)"
-echo "2. Audit your applications"
-echo "3. Help you migrate to managed updates"
+echo "2. Check and Migrate your applications to managed versions"
+echo "3. Configure real-time update monitoring"
 echo ""
 
 ask_confirmation() {
@@ -266,7 +268,7 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         echo "[L]eave     : Keep as is"
         echo "[Q]uit      : Stop migration and continue setup"
 
-        echo -n "Choose action [a/b/L/q]: "
+        echo -n "Choose action [a/b/l/q]: "
         read -r action
         echo ""
 
