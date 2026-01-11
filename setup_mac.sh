@@ -136,6 +136,11 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
 
     echo ""
     echo "${fg[magenta]}=== STARTING MIGRATION PROCESS ===${reset_color}"
+    STRICT_MATCH=0
+    if ask_confirmation "Enable Strict Matching for App Store? (Reduces false positives, but might miss apps with different store names)"; then
+        STRICT_MATCH=1
+    fi
+
     echo "For each app choose: [A]ppStore, [B]rew, [L]eave"
 
     for app in "${app_list[@]}"; do
@@ -159,8 +164,24 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
             mas_name=$(echo "$mas_check" | sed -E 's/^[0-9]+[[:space:]]+//;s/[[:space:]]+\(.*\)$//')
             mas_url="https://apps.apple.com/app/id$mas_id"
 
-            mas_status="${fg[green]}Available ($mas_name)${reset_color} ${fg[blue]}($mas_url)${reset_color}"
-            mas_available=1
+            # Strict Matching Logic
+            mas_valid=1
+            if [[ "$STRICT_MATCH" -eq 1 ]]; then
+                norm_app=$(echo "$app" | tr '[:upper:]' '[:lower:]' | tr -d ' -_.:')
+                norm_mas=$(echo "$mas_name" | tr '[:upper:]' '[:lower:]' | tr -d ' -_.:')
+
+                if [[ "$norm_app" != "$norm_mas" ]]; then
+                    mas_valid=0
+                fi
+            fi
+
+            if [[ "$mas_valid" -eq 1 ]]; then
+                mas_status="${fg[green]}Available ($mas_name)${reset_color} ${fg[blue]}($mas_url)${reset_color}"
+                mas_available=1
+            else
+                mas_status="${fg[red]}Mismatch in Strict Mode ($mas_name)${reset_color}"
+                mas_available=0
+            fi
         else
             mas_status="${fg[red]}Not found${reset_color}"
             mas_available=0
