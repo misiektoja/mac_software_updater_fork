@@ -2,6 +2,8 @@
 
 # UPDATE SECTION (Runs after clicking)
 if [[ "$1" == "run" ]]; then
+    set -e
+    set -o pipefail
     echo "Downloading definitions..."
     brew update
     echo "Updating Formulae and Casks..."

@@ -2,6 +2,8 @@
 
 # I enable colors for better terminal output visibility
 autoload -U colors && colors
+set -e
+set -o pipefail
 
 # I define a helper function for yes/no confirmations
 
