@@ -31,23 +31,16 @@ A seamless plugin for **SwiftBar** that sits in your macOS Menu Bar.
 
 ## 🛠 Quick Start Guide
 
-### 1. Download
-Download the `setup_mac.sh` script to your Mac.
-
-### 2. Run the Script
-Open your Terminal, navigate to the folder where you saved the script, and run the following commands:
+### 1. Run the Script
+The easiest way to get started is to run this command directly in your Terminal. It will download and launch the installer in one go:
 
 ```bash
-# Make the script executable
-chmod +x setup_mac.sh
-
-# Run the setup wizard
-./setup_mac.sh
+/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/main/setup_mac.sh)"
 ```
-### 3. Follow the Wizard
+### 2. Follow the Wizard
 The script will check your system and guide you through the migration process interactively.
 
-### 4. Finish
+### 3. Finish
 Once finished, **SwiftBar** will launch automatically.
 
 > **Important:** If macOS asks for permission to access your Documents folder, click **Allow**. This is required for the update plugin to work.
