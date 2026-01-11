@@ -211,10 +211,16 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         echo "[A]pp Store : $mas_status"
         echo "[B]rew Cask : $brew_status"
         echo "[L]eave     : Keep as is"
+        echo "[Q]uit      : Stop migration and continue setup"
 
-        echo -n "Choose action [a/b/L]: "
+        echo -n "Choose action [a/b/L/q]: "
         read -r action
         echo ""
+
+        if [[ "$action" == "q" || "$action" == "Q" ]]; then
+            echo "Stopping migration process..."
+            break
+        fi
 
         if [[ "$action" == "a" || "$action" == "A" ]]; then
             if [[ "$mas_available" -eq 1 ]]; then
