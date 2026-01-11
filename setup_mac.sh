@@ -7,11 +7,28 @@ set -o pipefail
 
 # I define a helper function for yes/no confirmations
 
+echo ""
+echo "${fg[blue]}███╗   ███╗ █████╗  ██████╗ ██████╗ ███████╗${reset_color}"
+echo "${fg[blue]}████╗ ████║██╔══██╗██╔════╝██╔═══██╗██╔════╝${reset_color}"
+echo "${fg[blue]}██╔████╔██║███████║██║     ██║   ██║███████╗${reset_color}"
+echo "${fg[blue]}██║╚██╔╝██║██╔══██║██║     ██║   ██║╚════██║${reset_color}"
+echo "${fg[blue]}██║ ╚═╝ ██║██║  ██║╚██████╗╚██████╔╝███████║${reset_color}"
+echo "${fg[blue]}╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝${reset_color}"
+echo ""
+echo "${fg[bold]}macOS Maintenance & Migration Toolkit${reset_color}"
+echo "-------------------------------------"
+echo "This script will: "
+echo "1. Install necessary tools (Homebrew, mas, SwiftBar)"
+echo "2. Audit your applications"
+echo "3. Help you migrate to managed updates"
+echo ""
+
 ask_confirmation() {
     local prompt="$1"
-    echo "$prompt [y/n]"
-    read -k 1 response
-    echo ""
+    echo -n "$prompt [y/N] "
+    read -r response
+    # Default to 'no' if empty
+    response=${response:-n}
     # I check for y (yes) or uppercase Y
     if [[ "$response" == "y" || "$response" == "Y" ]]; then
         return 0
@@ -48,8 +65,10 @@ else
 fi
 
 # I check for SF Symbols
+# I check for SF Symbols
 if ! brew list --cask sf-symbols &> /dev/null; then
-    if ask_confirmation "Would you like to install SF Symbols browser?"; then
+    echo "Optional: The 'SF Symbols' browser is only needed if you want to browse/customize icons."
+    if ask_confirmation "Would you like to install SF Symbols browser? (press 'y' if you plan to customize icons, otherwise 'n')"; then
         echo "Installing SF Symbols..."
         brew install --cask sf-symbols
     fi
@@ -199,7 +218,7 @@ echo "${fg[green]}=== SWIFTBAR CONFIGURATION ===${reset_color}"
 
 # I handle SwiftBar configuration safely
 EXISTING_DIR=$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null || echo "")
-GITHUB_URL="https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/main/update_system.1h.sh"
+GITHUB_URL="https://raw.githubusercontent.com/misiektoja/mac_software_updater/refs/heads/audit/security-and-logic/update_system.1h.sh"
 
 if [[ -n "$EXISTING_DIR" ]]; then
     # Expand tilde if present
