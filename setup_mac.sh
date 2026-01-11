@@ -155,8 +155,11 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         mas_check=$(mas search "$clean_name" | head -n 1)
         if [[ -n "$mas_check" ]]; then
             mas_id=$(echo "$mas_check" | awk '{print $1}')
+            # Extract name: remove ID from start, remove version (...) from end, trim spaces
+            mas_name=$(echo "$mas_check" | sed -E 's/^[0-9]+[[:space:]]+//;s/[[:space:]]+\(.*\)$//')
             mas_url="https://apps.apple.com/app/id$mas_id"
-            mas_status="${fg[green]}Available (${mas_check%% *})${reset_color} ${fg[blue]}($mas_url)${reset_color}"
+
+            mas_status="${fg[green]}Available ($mas_name)${reset_color} ${fg[blue]}($mas_url)${reset_color}"
             mas_available=1
         else
             mas_status="${fg[red]}Not found${reset_color}"
