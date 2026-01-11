@@ -37,6 +37,31 @@ ask_confirmation() {
     fi
 }
 
+quit_app() {
+    local app_name="$1"
+    # Basic check if running
+    if pgrep -f "$app_name" >/dev/null; then
+        echo "Closing ${fg[bold]}$app_name${reset_color}..."
+        # Graceful quit attempt
+        osascript -e "quit app \"$app_name\"" 2>/dev/null
+
+        # Wait up to 5 seconds
+        for i in {1..5}; do
+            if ! pgrep -f "$app_name" >/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+
+        # Force kill if still lingering
+        if pgrep -f "$app_name" >/dev/null; then
+            echo "Forcing close..."
+            # Prevent script exit if killall fails (e.g. permission mismatch)
+            killall "$app_name" 2>/dev/null || true
+        fi
+    fi
+}
+
 echo "Starting environment configuration..."
 
 # I ensure Homebrew is in the PATH for the current session
@@ -95,6 +120,13 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         CASKROOM_PATH="/usr/local/Caskroom"
     fi
 
+    # Pre-fetch installed casks for robust detection
+    if command -v brew &> /dev/null; then
+        INSTALLED_CASKS_STR=" $(brew list --cask | tr '\n' ' ') "
+    else
+        INSTALLED_CASKS_STR=""
+    fi
+
     for app_path in /Applications/*.app(N); do
         app_filename=$(basename "$app_path")
         app_name="${app_filename%.app}"
@@ -110,6 +142,14 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
 
         if [[ -d "$app_path/Contents/_MASReceipt" ]]; then
             app_sources[$app_name]="APP STORE"
+            continue
+        fi
+
+        # Fallback Check: Is it in 'brew list --cask'?
+        # (Handles cases where symlink is broken/overwritten but brew still manages it)
+        token_check=$(echo "$app_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+        if [[ "$INSTALLED_CASKS_STR" == *" $token_check "* ]]; then
+            app_sources[$app_name]="HOMEBREW"
             continue
         fi
 
@@ -229,6 +269,14 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                 mas_id=$(echo "$mas_check" | awk '{print $1}')
 
                 if ask_confirmation "Install from App Store and overwrite current version?"; then
+                    # Check if running before closing
+                    was_running=0
+                    if pgrep -f "$app" >/dev/null; then
+                        was_running=1
+                    fi
+
+                    quit_app "$app"
+
                     backup_name="${app}.app.bak"
                     if [[ -n "${app}" && -d "/Applications/${app}.app" ]]; then
                         echo "Backing up original app..."
@@ -240,6 +288,11 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                     if mas install "$mas_id"; then
                         echo "Migration successful. Removing backup..."
                         rm -rf "/Applications/$backup_name"
+
+                        if [[ "$was_running" -eq 1 ]]; then
+                            echo "Restarting ${fg[bold]}$app${reset_color}..."
+                            open -a "$app" || echo "${fg[yellow]}Could not restart app automatically.${reset_color}"
+                        fi
                     else
                          echo "${fg[red]}Error: App Store installation failed. Restoring original app...${reset_color}"
                         [[ -d "/Applications/$backup_name" ]] && mv "/Applications/$backup_name" "/Applications/${app}.app"
@@ -252,7 +305,20 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         elif [[ "$action" == "b" || "$action" == "B" ]]; then
              if [[ "$brew_available" -eq 1 ]]; then
                  if ask_confirmation "Install '$token' via Brew Cask (force)?"; then
-                    brew install --cask --force "$token"
+                    # Check if running before closing
+                    was_running=0
+                    if pgrep -f "$app" >/dev/null; then
+                         was_running=1
+                    fi
+
+                    quit_app "$app"
+
+                    if brew install --cask --force "$token"; then
+                         if [[ "$was_running" -eq 1 ]]; then
+                            echo "Restarting ${fg[bold]}$app${reset_color}..."
+                            open -a "$app" || echo "${fg[yellow]}Could not restart app automatically.${reset_color}"
+                        fi
+                    fi
                  fi
              else
                  # Manual fallback if they insist on B even though we didn't find it automatically
@@ -263,7 +329,19 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                  if [[ -n "$user_token" ]]; then
                      if brew info --cask "$user_token" &> /dev/null; then
                         if ask_confirmation "Install '$user_token' via Brew Cask (force)?"; then
-                            brew install --cask --force "$user_token"
+                            # Check if running
+                            was_running=0
+                            if pgrep -f "$app" >/dev/null; then
+                                was_running=1
+                            fi
+
+                            quit_app "$app"
+                            if brew install --cask --force "$user_token"; then
+                                if [[ "$was_running" -eq 1 ]]; then
+                                    echo "Restarting ${fg[bold]}$app${reset_color}..."
+                                    open -a "$app" || echo "${fg[yellow]}Could not restart app automatically.${reset_color}"
+                                    fi
+                            fi
                         fi
                      else
                         echo "Skipping: '$user_token' is not a valid Cask."
