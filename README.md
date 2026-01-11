@@ -1,81 +1,67 @@
 ![License](https://img.shields.io/github/license/pr-fuzzylogic/mac_software_updater?color=blue)
 ![Last Commit](https://img.shields.io/github/last-commit/pr-fuzzylogic/mac_software_updater)
-![Repo Size](https://img.shields.io/github/repo-size/pr-fuzzylogic/mac_software_updater)
-# macOS Maintenance & Migration Toolkit 
 
-A powerful automation tool designed to audit, migrate, and maintain your macOS applications. This project combines **Homebrew**, **Mac App Store CLI (mas)**, and **SwiftBar** to create a unified system for keeping your software clean and up-to-date.
+# macOS Software Update & Migration Toolkit 
 
-## 🚀 What It Does
+A targeted automation tool designed to bring order to your macOS environment. This project combines **Homebrew**, **Mac App Store CLI (mas)**, and **SwiftBar** to solve two specific problems:
+1.  **Migration:** Moving manually installed applications under the control of package managers (App Store or Homebrew).
+2.  **Updates:** Monitoring available updates from the menu bar and installing them in bulk via the terminal.
 
-### 1. Automated Setup & Migration (`setup_mac.sh`)
-An interactive wizard that scans your system and organizes your applications.
-* **Environment Setup:** Automatically installs missing tools: `Homebrew`, `mas`, `sf-symbols`, and `SwiftBar`.
-* **Smart Audit:** Scans your `/Applications` folder to detect how apps were installed (App Store vs. Homebrew vs. Manual Drag & Drop).
-* **Migration Wizard:** Asks you what to do with unmanaged apps:
+## 🚀 How It Works
+
+This is not a generic maintenance utility. It is a set of two scripts performing specific tasks:
+
+### 1. Migration Wizard (`setup_mac.sh`)
+Run via terminal, this script scans your `/Applications` folder to detect unmanaged software. For every app found, it checks if a matching version exists in Homebrew or the App Store.
+
+* **The Audit:** Distinguishes between System apps, Homebrew apps, and manually downloaded apps.
+* **The Decision:** For every "unmanaged" app (e.g., Spotify or Chrome installed manually), it asks you for an action:
     * **[A]pp Store:** Replaces the manual version with the official App Store version.
-    * **[B]rew:** Replaces the manual version with a Homebrew Cask (preserving settings).
-    * **[L]eave:** Keeps the app as it is.
-* **Auto-Config:** Automatically installs and configures the update monitor plugin.
+    * **[B]rew Cask:** Replaces the manual version with a Homebrew Cask (preserving settings).
+    * **[L]eave:** Keeps the app exactly as it is.
+* **Safety First:** Before any migration, it creates a local backup (`.app.bak`). If the new installation fails, it automatically restores the original application.
 
 ### 2. Menu Bar Monitor (`update_system.1h.sh`)
-A seamless plugin for **SwiftBar** that sits in your macOS Menu Bar.
-* **Live Status:** Shows a cycle icon with the count of available updates (combining Homebrew & App Store).
-* **One-Click Update:** Clicking "Update All" launches a terminal process that updates everything, cleans up system garbage, and refreshes the status automatically.
+A lightweight plugin for **SwiftBar**.
+* **Status:** A discreet icon in the menu bar displays the total count of available updates (combining Homebrew & App Store).
+* **Action:** Clicking "Update All" launches a terminal window to run `brew upgrade` and `mas upgrade`, followed by a system cleanup.
 
 ---
 
 ## 📋 Prerequisites
 
 * **macOS** (Intel or Apple Silicon).
-* **Internet Connection**.
-* No prior installation of Homebrew is required – the script handles everything.
+* Internet Connection.
+* No prior installation of Homebrew is required – the script handles the setup.
 
 ---
 
-## 🛠 Quick Start Guide
+## 🛠 Quick Start
 
-### 1. Run the Script
-The easiest way to get started is to run this command directly in your Terminal. It will download and launch the installer in one go:
+### 1. Run the Installer
+The fastest way to start is to run this command in your Terminal. It downloads and triggers the migration wizard:
 
 ```bash
 /bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/main/setup_mac.sh)"
 ```
 ### 2. Follow the Wizard
-The script will check your system and guide you through the migration process interactively.
+The script will prompt you on how to handle detected applications. You can choose to migrate them or skip the process entirely.
 
 ### 3. Finish
-Once finished, **SwiftBar** will launch automatically.
+Once completed, **SwiftBar** will launch automatically with the update monitor loaded.
 
-> **Important:** If macOS asks for permission to access your Documents folder, click **Allow**. This is required for the update plugin to work.
+> **Important:** If macOS asks for permission to access your Documents folder, click **Allow**. This is required for SwiftBar to write and read the plugin file.
 
 ---
 
-## 🧠 How It Works
+## 📦 Tools Used
 
-This toolkit uses **"Atomic Detection"** logic to ensure 100% accuracy:
+This toolkit acts as the "glue" integrating standard macOS power-user tools:
 
-* **Homebrew Apps:** Identified by checking if the application file is a **symlink** pointing to the internal Caskroom.
-* **App Store Apps:** Identified by verifying the presence of a valid `_MASReceipt` inside the application bundle.
-* **Manual Apps:** Anything else is flagged for your review.
-
-## ⚠️ Notes
-
-* **System Apps:** Apple system applications (Safari, Photos, etc.) are automatically ignored to prevent errors.
-* **Complex Software:** Large suites like Adobe CC or Microsoft Office are best left as `[L]eave` unless you specifically want to reinstall them via Homebrew.
-
-## 📦 Tools Used in This Toolkit
-
-To provide a seamless experience, this project integrates several industry-standard tools for macOS power users:
-
-* **[Homebrew](https://brew.sh)**
-    The essential package manager for macOS. I use it to install, update, and manage command-line tools and desktop applications (Casks) that Apple does not include by default.
-* **[mas-cli](https://github.com/mas-cli/mas)**
-    A command-line interface for the Mac App Store. I implement this to automate updates for your App Store apps without needing to open the graphical interface.
-* **[SwiftBar](https://swiftbar.app)**
-    A powerful tool that lets you customize your macOS menu bar using scripts. It serves as the frontend for my real-time update monitor.
-* **[SF Symbols](https://developer.apple.com/sf-symbols/)**
-    A library of iconography designed by Apple. I use these symbols to provide native-looking icons in your menu bar. 
-    **Note:** This is optional; you only need it if you want to browse and change icons manually. The script works perfectly with the built-in defaults.
+* **[Homebrew](https://brew.sh)** – The primary package manager. Used to install and update the majority of applications.
+* **[mas-cli](https://github.com/mas-cli/mas)** – Command-line interface for the Mac App Store. Allows updating Store apps without opening the GUI.
+* **[SwiftBar](https://swiftbar.app)** – Open-source app that runs the monitor script and displays the output in the macOS menu bar.
+* **[SF Symbols](https://developer.apple.com/sf-symbols/)** (Optional) – Apple's icon library. The installer will ask if you want to download it. It is **only** needed if you plan to manually customize the icons in the script code. The default icons work without it.
 
 ---
 
