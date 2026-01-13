@@ -16,7 +16,7 @@ echo "${fg[blue]}██║ ╚═╝ ██║██║  ██║╚███�
 echo "${fg[blue]}╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝${reset_color}"
 echo ""
 echo "${fg[cyan]}--------------------------------------------------${reset_color}"
-echo "${fg[bold]}  mac_software_updater${reset_color} v1.0.0"
+echo "${fg[bold]}  mac_software_updater${reset_color} v1.1.2"
 echo "${fg[cyan]}  Software Update & Application Migration Toolkit${reset_color}"
 echo "${fg[cyan]}--------------------------------------------------${reset_color}"
 echo "This script will: "
@@ -91,8 +91,7 @@ else
     echo "mas tool is present."
 fi
 
-# I check for SF Symbols
-# I check for SF Symbols
+# Check for SF Symbols
 if ! brew list --cask sf-symbols &> /dev/null; then
     echo "Optional: The 'SF Symbols' browser is only needed if you want to browse/customize icons."
     if ask_confirmation "Would you like to install SF Symbols browser? (press 'y' if you plan to customize icons, otherwise 'n')"; then
@@ -101,7 +100,7 @@ if ! brew list --cask sf-symbols &> /dev/null; then
     fi
 fi
 
-# I check for SwiftBar
+# Check for SwiftBar
 if ! brew list --cask swiftbar &> /dev/null; then
     echo "Installing SwiftBar..."
     brew install --cask swiftbar
@@ -211,7 +210,8 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         clean_name=$(echo "$app" | sed 's/[0-9.]*$//' | tr -d ':-')
 
         # Check App Store
-        mas_check=$(mas search "$clean_name" | head -n 1)
+        # Search the App Store and ensure that a failed search doesn't kill the script
+        mas_check=$(mas search "$clean_name" 2>/dev/null | head -n 1 || true)
         if [[ -n "$mas_check" ]]; then
             mas_id=$(echo "$mas_check" | awk '{print $1}')
             # Extract name: remove ID from start, remove version (...) from end, trim spaces
@@ -250,7 +250,8 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
             brew_available=1
         else
              # Fallback search
-             brew_search=$(brew search --cask "$app" 2>/dev/null | grep -v "Warning" | head -n 1)
+             # perform a fallback search if the direct token match fails
+             brew_search=$(brew search --cask "$app" 2>/dev/null | grep -v "Warning" | head -n 1 || true)
              if [[ -n "$brew_search" ]]; then
                 token="$brew_search"
                 brew_url="https://formulae.brew.sh/cask/$token"
