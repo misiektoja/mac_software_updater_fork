@@ -1,0 +1,37 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+/* --- NAPRAWA TABELEK --- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 20px;
+  display: table; /* Wymusza poprawne wyświetlanie */
+}
+
+/* Dodanie ramek i odstępów */
+th, td {
+  border: 1px solid #555; /* Kolor ramki dopasowany do ciemnego tła */
+  padding: 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+/* Nagłówki tabeli */
+th {
+  background-color: #333;
+  font-weight: bold;
+}
+
+/* --- NAPRAWA OBRAZKÓW W TABELI --- */
+
+/* Ograniczenie wielkości ikon w tabeli, żeby nie rozpychały komórek */
+table img {
+  max-width: 150px; /* Maksymalna szerokość obrazka w tabeli */
+  height: auto;
+  display: block;
+  margin: 0 auto; /* Wyśrodkowanie */
+}
