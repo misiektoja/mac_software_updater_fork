@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.2.2</bitbar.version>
+# <bitbar.version>v1.2.3</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -19,6 +19,25 @@
 # Set standard locale to avoid parsing errors with grep or sort on different system languages
 export LC_ALL=C
 umask 077
+
+# --- THEME CONFIGURATION (DUAL MODE) ---
+# Format: COLOR_LIGHT,COLOR_DARK
+# SwiftBar automatically switches between these based on system theme WITHOUT needing a refresh.
+
+# Text Color: Almost Black for Light Mode, Light Gray for Dark Mode
+COLOR_INFO="#333333,#B0B0B0"
+
+# Success (Green): Deep Emerald for Light, Neon Green for Dark
+COLOR_SUCCESS="#007A33,#32D74B"
+
+# Warning (Red): Deep Red for Light, Bright Red for Dark
+COLOR_WARN="#D70015,#FF453A"
+
+# Purple: Deep Indigo for Light, Pastel Purple for Dark
+COLOR_PURPLE="#5856D6,#BF5AF2"
+
+# Blue: Deep Blue for Light, Sky Blue for Dark
+COLOR_BLUE="#0040DD,#54A0FF"
 
 # Extract version dynamically from the first 5 lines of the script
 VERSION=$(head -n 5 "$0" | grep "<bitbar.version>" | sed 's/.*<bitbar.version>\(.*\)<\/bitbar.version>.*/\1/' | tr -d '\n\r')
@@ -224,12 +243,17 @@ if [[ "$1" == "run" ]]; then
 
     # Calculate the actual number of pending updates AFTER the fresh fetch
     echo "🔍 Calculating pending updates..."
-    # Using 'grep -c' is safer than 'wc -l' to avoid counting empty lines
-    real_brew_count=$(brew outdated --greedy | grep -c -- '[^[:space:]]' || true)
     
+    # Check Homebrew (filtered)
+    # We filter out "latest != latest" and fonts to match the UI logic
+    real_brew_count=$(brew outdated --greedy | grep -v "latest) != latest" | grep -v "^font-" | grep -c -- '[^[:space:]]' || true)
+    
+    # Check MAS
     real_mas_count=0
     if command -v mas &> /dev/null; then
-        real_mas_count=$(mas outdated | grep -c -- '[^[:space:]]' || true)
+        # Check only for lines starting with a number (App ID) to avoid counting errors
+        # Używamy || true, aby zignorować błąd grepa, ale nie dodawać nadmiarowego "0"
+        real_mas_count=$(mas outdated | grep -E '^[0-9]+' | wc -l | tr -d ' ' || true)
     fi
     
     updates_count=$((real_brew_count + real_mas_count))
@@ -332,15 +356,17 @@ if [[ "$UPDATES_ENABLED" == "true" ]]; then
 fi
 
 # Check Homebrew for updates
-list_brew=$(brew outdated --verbose --greedy)
-count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]')
+# We keep --greedy to catch auto-updating apps, but filter out "latest" tautologies and fonts
+list_brew=$(brew outdated --verbose --greedy | grep -v "latest) != latest" | grep -v "^font-")
+count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]' || true)
 
 # Check App Store for updates
 list_mas=""
 count_mas=0
 if command -v mas &> /dev/null; then
     list_mas=$(mas outdated)
-    count_mas=$(echo -n "$list_mas" | grep -c -- '[^[:space:]]')
+    # Filter: Count only lines starting with digits (valid App IDs)
+    count_mas=$(echo "$list_mas" | grep -E '^[0-9]+' | wc -l | tr -d ' ')
 fi
 
 total=$((count_brew + count_mas))
@@ -375,14 +401,15 @@ fi
 # Set main menu bar icon status based on updates and plugin availability
 if [[ $update_available -eq 1 ]]; then
     if [[ $total -gt 0 ]]; then
-        echo " $total | sfimage=arrow.down.circle.fill color=purple"
+        echo " $total | sfimage=arrow.down.circle.fill color=$COLOR_PURPLE"
     else
-        echo " ! | sfimage=arrow.down.circle.fill color=blue"
+        echo " ! | sfimage=arrow.down.circle.fill color=$COLOR_BLUE"
     fi
 else
     if [[ $total -gt 0 ]]; then
-        echo " $total | sfimage=arrow.triangle.2.circlepath.circle color=red"
+        echo " $total | sfimage=arrow.triangle.2.circlepath.circle color=$COLOR_WARN"
     else
+        # No color specified here ensures it adapts to system text color (monochrome)
         echo " | sfimage=checkmark.circle"
     fi
 fi
@@ -391,7 +418,7 @@ echo "---"
 # Render Plugin Update Notification
 if [[ $update_available -eq 1 ]]; then
     script_path="$(swiftbar_sq_escape "$0")"
-    echo "Plugin Update Available | color=blue sfimage=arrow.down.circle.fill"
+    echo "Plugin Update Available | color=$COLOR_BLUE sfimage=arrow.down.circle.fill"
     echo "-- Update Now | bash='$script_path' param1=update_plugin terminal=true sfimage=arrow.triangle.2.circlepath"
     echo "---"
 fi
@@ -399,18 +426,18 @@ fi
 # Show update details
 if [[ $total -eq 0 ]]; then
     if [[ $update_available -eq 1 ]]; then
-        echo "Local apps are up to date | color=gray size=10"
+        echo "Local apps are up to date | color=$COLOR_INFO size=10"
     else
-        echo "System is up to date | color=green sfimage=checkmark.shield"
+        echo "System is up to date | color=$COLOR_SUCCESS sfimage=checkmark.shield"
     fi
 else
     if [[ $count_brew -gt 0 ]]; then
-        echo "Homebrew ($count_brew): | color=gray size=12 sfimage=shippingbox"
+        echo "Homebrew ($count_brew): | color=$COLOR_INFO size=12 sfimage=shippingbox"
         echo "$list_brew" | while read -r line; do echo "$line | size=12 font=Monaco"; done
         echo "---"
     fi
     if [[ $count_mas -gt 0 ]]; then
-        echo "App Store ($count_mas): | color=gray size=12 sfimage=bag"
+        echo "App Store ($count_mas): | color=$COLOR_INFO size=12 sfimage=bag"
         # Show App Store updates without the numerical digital ID for a cleaner UI
         echo "$list_mas" | awk '{$1=""; print $0}' | while read -r line; do echo "$line | size=12 font=Monaco"; done
     fi
@@ -418,14 +445,14 @@ fi
 
 # Render statistics and history with submenus
 echo "---"
-echo "Monitored: $total_installed items | color=gray size=12 sfimage=chart.bar.xaxis"
-echo "-- Apps (Brew Cask): $count_casks | color=gray size=11 sfimage=square.stack.3d.up"
-echo "-- CLI Tools (Brew Formulae): $count_formulae | color=gray size=11 sfimage=terminal"
-echo "-- App Store: $count_mas_installed | color=gray size=11 sfimage=bag"
+echo "Monitored: $total_installed items | color=$COLOR_INFO size=12 sfimage=chart.bar.xaxis"
+echo "-- Apps (Brew Cask): $count_casks | color=$COLOR_INFO size=11 sfimage=square.stack.3d.up"
+echo "-- CLI Tools (Brew Formulae): $count_formulae | color=$COLOR_INFO size=11 sfimage=terminal"
+echo "-- App Store: $count_mas_installed | color=$COLOR_INFO size=11 sfimage=bag"
 
-echo "History: | color=gray size=12 sfimage=clock.arrow.circlepath"
-echo "-- Past 7 days: $updates_week updates | color=gray size=11 sfimage=calendar"
-echo "-- Past 30 days: $updates_month updates | color=gray size=11 sfimage=calendar.badge.clock"
+echo "History: | color=$COLOR_INFO size=12 sfimage=clock.arrow.circlepath"
+echo "-- Past 7 days: $updates_week updates | color=$COLOR_INFO size=11 sfimage=calendar"
+echo "-- Past 30 days: $updates_month updates | color=$COLOR_INFO size=11 sfimage=calendar.badge.clock"
 
 # Render the footer with operational buttons
 echo "---"
@@ -433,15 +460,17 @@ script_path="${0// /\\ }"
 if [[ $total -gt 0 ]]; then
     echo "Update All | bash='$script_path' param1=run terminal=true sfimage=arrow.triangle.2.circlepath.circle"
 else
-    echo "Update All | color=gray sfimage=checkmark.circle"
+    echo "Update All | color=$COLOR_INFO sfimage=checkmark.circle"
 fi
-echo "Last check: $(date +%H:%M) | size=10 color=gray"
+echo "Last check: $(date +%H:%M) | size=10 color=$COLOR_INFO"
 echo "Refresh now | refresh=true sfimage=arrow.clockwise"
 
 # Bottom Group: Preferences & About
 echo "---"
 echo "Preferences | sfimage=gearshape"
 echo "-- Change Update Frequency | bash='$script_path' param1=change_interval terminal=false refresh=true sfimage=hourglass"
+echo "-- Force Plugin Update | bash='$script_path' param1=update_plugin terminal=true sfimage=arrow.down.to.line.circle"
+
 if [[ "$UPDATES_ENABLED" == "true" ]]; then
     echo "-- Disable Self-Update | bash='$script_path' param1=toggle_updates terminal=false refresh=true sfimage=xmark.circle"
 else

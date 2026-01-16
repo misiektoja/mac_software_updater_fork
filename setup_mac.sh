@@ -20,7 +20,7 @@ echo "${fg[blue]}██║ ╚═╝ ██║██║  ██║╚███�
 echo "${fg[blue]}╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝${reset_color}"
 echo ""
 echo "${fg[cyan]}--------------------------------------------------${reset_color}"
-echo "${fg[bold]}  mac_software_updater${reset_color} v1.2.2"
+echo "${fg[bold]}  mac_software_updater${reset_color} v1.2.3"
 echo "${fg[cyan]}  Software Update & Application Migration Toolkit${reset_color}"
 echo "${fg[cyan]}--------------------------------------------------${reset_color}"
 echo "This script will: "
@@ -179,7 +179,8 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
             continue
         fi
 
-        bundle_id=$(mdls -name kMDItemCFBundleIdentifier -raw "$app_path" 2>/dev/null)
+        # Try to get ID, but if it fails (e.g. system app on read-only volume), default to a fake apple ID
+        bundle_id=$(mdls -name kMDItemCFBundleIdentifier -raw "$app_path" 2>/dev/null || echo "com.apple.unknown")
         if [[ "$bundle_id" == com.apple.* ]]; then
             app_sources[$app_name]="SYSTEM"
             continue

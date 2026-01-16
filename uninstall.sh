@@ -3,7 +3,7 @@
 
 # <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
 # <bitbar.title>Mac Software Updater Uninstaller</bitbar.title>
-# <bitbar.version>v1.2.2</bitbar.version>
+# <bitbar.version>v1.2.3</bitbar.version>
 # <bitbar.desc>Safely removes the updater script, logs, and optional dependencies.</bitbar.desc>
 
 autoload -U colors && colors
