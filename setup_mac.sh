@@ -213,7 +213,12 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         # Get local version
         if [[ "$ENABLE_VERSION_SCAN" -eq 1 ]]; then
             app_version=$(mdls -name kMDItemVersion -raw "$app_path" 2>/dev/null | tr -d '"' || echo "")
-            if [[ -n "$app_version" && "$app_version" != "(null)" ]]; then
+            # Fallback to defaults read if mdls fails or returns (null) - Spotlight dependency
+            if [[ -z "$app_version" || "$app_version" == "(null)" ]]; then
+                app_version=$(defaults read "$app_path/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "")
+            fi
+
+            if [[ -n "$app_version" ]]; then
                  app_versions[$app_name]="$app_version"
             fi
         fi
