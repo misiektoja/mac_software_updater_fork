@@ -101,13 +101,53 @@ quit_app() {
 
 # Moves the specified .app bundle to a backup location.
 # Treats the application as a directory (bundle) and attempts sudo if standard move fails.
+# Sets global USED_SUDO=1 if sudo was required, 0 otherwise.
+# Returns 0 on success, 1 on failure.
 backup_app() {
     local app_path="$1"
     local backup_path="$2"
+    USED_SUDO=0
+
     if [[ -d "$app_path" ]]; then
         echo "Backing up original app to '$backup_path'..."
-        mv "$app_path" "$backup_path" || sudo mv "$app_path" "$backup_path"
+        if ! mv "$app_path" "$backup_path" 2>/dev/null; then
+            echo "Permission denied. Attempting with sudo..."
+            if sudo mv "$app_path" "$backup_path"; then
+                USED_SUDO=1
+                return 0
+            else
+                echo "${fg[red]}Error: Failed to backup app even with sudo${reset_color}"
+                return 1
+            fi
+        fi
     fi
+    return 0
+}
+
+# Removes a backup directory, using sudo if needed
+# Returns 0 on success, 1 on failure
+remove_backup() {
+    local backup_path="$1"
+    local force_sudo="${2:-0}"  # Optional: 1 to force sudo, 0 to try without first
+
+    if [[ ! -e "$backup_path" ]]; then
+        return 0  # Nothing to remove
+    fi
+
+    echo "Removing backup..."
+    if [[ "$force_sudo" -eq 1 ]]; then
+        # Backup was created with sudo, so removal likely needs sudo too
+        sudo rm -rf "$backup_path" 2>/dev/null
+        return $?
+    else
+        # Try without sudo first
+        if ! rm -rf "$backup_path" 2>/dev/null; then
+            echo "Permission denied. Attempting with sudo..."
+            sudo rm -rf "$backup_path" 2>/dev/null
+            return $?
+        fi
+    fi
+    return 0
 }
 
 # Ensures a clean installation of a Homebrew Cask by removing existing metadata.
@@ -501,19 +541,26 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                     app_path="/Applications/${app}.app"
                     backup_path="/Applications/${app}.app.bak"
                     backup_app "$app_path" "$backup_path"
+                    needs_sudo=$USED_SUDO
 
                     [[ "$source" == "HOMEBREW" ]] && brew uninstall --cask "$(echo "$app" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')" 2>/dev/null || true
 
                     if mas install "$mas_id"; then
-                        echo "Migration successful. Removing backup..."
-                        rm -rf "$backup_path" || sudo rm -rf "$backup_path"
+                        echo "Migration successful!"
+                        remove_backup "$backup_path" "$needs_sudo"
                         if [[ "$was_running" -eq 1 ]]; then
                             echo "Restarting ${fg[bold]}$app${reset_color}..."
                             open -a "$app" || echo "${fg[yellow]}Could not restart app automatically.${reset_color}"
                         fi
                     else
                          echo "${fg[red]}Error: App Store installation failed. Restoring original app...${reset_color}"
-                        if [[ -d "$backup_path" ]]; then mv "$backup_path" "$app_path" || sudo mv "$backup_path" "$app_path"; fi
+                        if [[ -d "$backup_path" ]]; then
+                            if [[ "$needs_sudo" -eq 1 ]]; then
+                                sudo mv "$backup_path" "$app_path"
+                            else
+                                mv "$backup_path" "$app_path" || sudo mv "$backup_path" "$app_path"
+                            fi
+                        fi
                     fi
                 fi
             else
@@ -532,11 +579,11 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                     app_path="/Applications/${app}.app"
                     backup_path="/Applications/${app}.app.bak"
                     backup_app "$app_path" "$backup_path"
+                    needs_sudo=$USED_SUDO
 
                     if install_brew_cask_clean "$token"; then
                          echo "${fg[green]}Migration successful!${reset_color}"
-                         echo "Removing backup..."
-                         rm -rf "$backup_path" || sudo rm -rf "$backup_path"
+                         remove_backup "$backup_path" "$needs_sudo"
                          # Restart app if it was previously running
                          if [[ "$was_running" -eq 1 ]]; then
                             echo "Restarting ${fg[bold]}$app${reset_color}..."
@@ -549,8 +596,18 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                         echo ""
                         echo "${fg[red]}❌ Error: Homebrew installation failed!${reset_color}"
                         echo "Restoring original application from backup..."
-                        if [[ -d "$app_path" ]]; then rm -rf "$app_path" || sudo rm -rf "$app_path"; fi
-                        mv "$backup_path" "$app_path" || sudo mv "$backup_path" "$app_path"
+                        if [[ -d "$app_path" ]]; then
+                            if [[ "$needs_sudo" -eq 1 ]]; then
+                                sudo rm -rf "$app_path"
+                            else
+                                rm -rf "$app_path" || sudo rm -rf "$app_path"
+                            fi
+                        fi
+                        if [[ "$needs_sudo" -eq 1 ]]; then
+                            sudo mv "$backup_path" "$app_path"
+                        else
+                            mv "$backup_path" "$app_path" || sudo mv "$backup_path" "$app_path"
+                        fi
                         echo "${fg[yellow]}Original application restored. Nothing changed.${reset_color}"
                     fi
                  fi
@@ -568,10 +625,11 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                             app_path="/Applications/${app}.app"
                             backup_path="/Applications/${app}.app.bak"
                             backup_app "$app_path" "$backup_path"
+                            needs_sudo=$USED_SUDO
 
                             if install_brew_cask_clean "$user_token"; then
                                 echo "${fg[green]}Migration successful!${reset_color}"
-                                rm -rf "$backup_path" || sudo rm -rf "$backup_path"
+                                remove_backup "$backup_path" "$needs_sudo"
                                 # Restart app if it was previously running
                                 if [[ "$was_running" -eq 1 ]]; then
                                     echo "Restarting ${fg[bold]}$app${reset_color}..."
@@ -584,8 +642,18 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                                 echo ""
                                 echo "${fg[red]}❌ Error: Homebrew installation failed!${reset_color}"
                                 echo "Restoring original application..."
-                                if [[ -d "$app_path" ]]; then rm -rf "$app_path" || sudo rm -rf "$app_path"; fi
-                                mv "$backup_path" "$app_path" || sudo mv "$backup_path" "$app_path"
+                                if [[ -d "$app_path" ]]; then
+                                    if [[ "$needs_sudo" -eq 1 ]]; then
+                                        sudo rm -rf "$app_path"
+                                    else
+                                        rm -rf "$app_path" || sudo rm -rf "$app_path"
+                                    fi
+                                fi
+                                if [[ "$needs_sudo" -eq 1 ]]; then
+                                    sudo mv "$backup_path" "$app_path"
+                                else
+                                    mv "$backup_path" "$app_path" || sudo mv "$backup_path" "$app_path"
+                                fi
                                 echo "${fg[yellow]}Restored.${reset_color}"
                             fi
                         fi
