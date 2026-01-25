@@ -315,7 +315,7 @@ if [[ "$1" == "run" ]]; then
 
     real_mas_count=0
     if command -v mas &> /dev/null; then
-        real_mas_count=$(mas outdated | grep -E '^[0-9]+' | wc -l | tr -d ' ' || true)
+        real_mas_count=$(mas outdated | grep -E '^[[:space:]]*[0-9]+' | wc -l | tr -d ' ' || true)
     fi
 
     updates_count=$((real_brew_count + real_mas_count))
@@ -376,7 +376,7 @@ list_mas=""
 count_mas=0
 if command -v mas &> /dev/null; then
     list_mas=$(mas outdated)
-    count_mas=$(echo "$list_mas" | grep -E '^[0-9]+' | wc -l | tr -d ' ')
+    count_mas=$(echo "$list_mas" | grep -E '^[[:space:]]*[0-9]+' | wc -l | tr -d ' ')
 fi
 
 total=$((count_brew + count_mas))
