@@ -341,7 +341,7 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
         if [[ -n "$mas_check" ]]; then
             mas_id=$(echo "$mas_check" | awk '{print $1}')
             # Extract name: remove ID from start, remove version (...) from end, trim spaces
-            mas_name=$(echo "$mas_check" | sed -E 's/^[0-9]+[[:space:]]+//;s/[[:space:]]+\(.*\)$//')
+            mas_name=$(echo "$mas_check" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//;s/[[:space:]]+\(.*\)$//')
             mas_url="https://apps.apple.com/app/id$mas_id"
             # Strict Matching Logic
             mas_valid=1
