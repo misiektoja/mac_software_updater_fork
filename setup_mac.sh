@@ -83,7 +83,7 @@ quit_app() {
     if pgrep -f "$app_name" >/dev/null; then
         echo "Closing ${fg[bold]}$app_name${reset_color}..."
         # Graceful quit attempt
-        osascript -e "quit app \"$app_name\"" 2>/dev/null
+        osascript -e "quit app \"$app_name\"" 2>/dev/null || true
         # Wait up to 5 seconds
         for i in {1..5}; do
             if ! pgrep -f "$app_name" >/dev/null; then break; fi
@@ -502,7 +502,7 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                     backup_path="/Applications/${app}.app.bak"
                     backup_app "$app_path" "$backup_path"
 
-                    [[ "$source" == "HOMEBREW" ]] && brew uninstall --cask "$(echo "$app" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')" 2>/dev/null
+                    [[ "$source" == "HOMEBREW" ]] && brew uninstall --cask "$(echo "$app" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')" 2>/dev/null || true
 
                     if mas install "$mas_id"; then
                         echo "Migration successful. Removing backup..."
