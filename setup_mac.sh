@@ -392,8 +392,19 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
             if [[ "$STRICT_MATCH" -eq 1 ]]; then
                 norm_app=$(echo "$app" | tr '[:upper:]' '[:lower:]' | tr -d ' -_.:')
                 norm_mas=$(echo "$mas_name" | tr '[:upper:]' '[:lower:]' | tr -d ' -_.:')
-                # Allow prefix match (e.g. "Almighty" matches "Almighty - Powerful Tweaks")
-                if [[ "$norm_mas" != "$norm_app"* ]]; then mas_valid=0; fi
+
+                # Default to invalid in strict mode, prove validity
+                mas_valid=0
+
+                # Check 1: Prefix match (Store result starts with App Name)
+                # Example: "Almighty" matches "Almighty - Powerful Tweaks"
+                if [[ "$norm_mas" == "$norm_app"* ]]; then
+                    mas_valid=1
+                # Check 2: Reverse containment with length guard (Store Name is inside App Name)
+                # Example: "Amazon Kindle" contains "Kindle" (length >= 5)
+                elif [[ "$norm_app" == *"$norm_mas"* ]] && [[ ${#norm_mas} -ge 5 ]]; then
+                    mas_valid=1
+                fi
             fi
             if [[ "$mas_valid" -eq 1 ]]; then
                 # Extract version from parentheses if present
