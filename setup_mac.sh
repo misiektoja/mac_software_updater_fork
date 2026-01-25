@@ -351,7 +351,7 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
                 if [[ "$ENABLE_VERSION_SCAN" -eq 1 ]]; then
                     mas_version=$(echo "$mas_check" | sed -E 's/.*\(([^)]+)\)$/\1/')
                     if [[ "$mas_version" != "$mas_check" ]]; then
-                        mas_status="${fg[green]}Available${reset_color} (${fg[cyan]}$mas_version${reset_color}) ${fg[blue]}($mas_url)${reset_color}"
+                        mas_status="${fg[green]}Available${reset_color} (${fg[cyan]}$mas_name${reset_color} ${fg[magenta]}$mas_version${reset_color}) ${fg[blue]}($mas_url)${reset_color}"
                     else
                         mas_status="${fg[green]}Available${reset_color} (${fg[cyan]}$mas_name${reset_color}) ${fg[blue]}($mas_url)${reset_color}"
                     fi
@@ -377,7 +377,7 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
 
             if [[ "$ENABLE_VERSION_SCAN" -eq 1 ]]; then
                 brew_version=$(echo "$brew_info_output" | head -n 1 | awk '{print $3}')
-                brew_status="${fg[green]}Available${reset_color} (${fg[cyan]}$brew_version${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
+                brew_status="${fg[green]}Available${reset_color} (${fg[cyan]}$token${reset_color} ${fg[magenta]}$brew_version${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
             else
                 brew_status="${fg[green]}Available${reset_color} (${fg[cyan]}$token${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
             fi
@@ -401,7 +401,7 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
 
                  if [[ "$ENABLE_VERSION_SCAN" -eq 1 ]]; then
                      brew_version=$(brew info --cask "$token" | head -n 1 | awk '{print $3}')
-                     brew_status="${fg[yellow]}Found as${reset_color} (${fg[cyan]}$brew_version${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
+                     brew_status="${fg[yellow]}Found as${reset_color} (${fg[cyan]}$token${reset_color} ${fg[magenta]}$brew_version${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
                  else
                      brew_status="${fg[yellow]}Found as${reset_color} (${fg[cyan]}$token${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
                  fi
