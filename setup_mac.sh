@@ -815,12 +815,19 @@ open -g "swiftbar://refreshallplugins"
 
 # Enable autostart for SwiftBar
 echo "Ensuring SwiftBar autostarts at login..."
-if ! osascript -e 'tell application "System Events" to get the name of every login item' | grep -q "SwiftBar"; then
+if ! osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null | grep -q "SwiftBar"; then
     echo "Adding SwiftBar to Login Items..."
-    osascript -e 'tell application "System Events" to make login item at end with properties {path:"/Applications/SwiftBar.app", hidden:false}'
+    osascript -e 'tell application "System Events" to make login item at end with properties {path:"/Applications/SwiftBar.app", hidden:false}' >/dev/null 2>&1
     echo "${fg[green]}✓ SwiftBar added to Login Items.${reset_color}"
 else
     echo "${fg[green]}✓ SwiftBar is already in Login Items.${reset_color}"
+fi
+
+# Launch SwiftBar if not already running
+if ! pgrep -x "SwiftBar" >/dev/null; then
+    echo "Starting SwiftBar..."
+    open -a SwiftBar
+    sleep 2  # Give SwiftBar time to start before refreshing plugins
 fi
 
 echo ""
