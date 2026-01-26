@@ -483,33 +483,79 @@ if ask_confirmation "Do you want to run the application migration? (Scanning and
             fi
             brew_available=1
         else
-             # Sanity Check for Search Results (Eve != deveco-studio)
-             brew_search=$(brew search --cask "$clean_name" 2>/dev/null | grep -v "Warning" | head -n 1 || true)
-             match_valid=0
-             if [[ -n "$brew_search" ]]; then
-                norm_app=$(echo "$clean_name" | tr '[:upper:]' '[:lower:]')
-                norm_result=$(echo "$brew_search" | tr '[:upper:]' '[:lower:]')
-                # Strict prefix matching
-                if [[ "$norm_result" == "$norm_app"* ]]; then
-                    match_valid=1
+            # Generate token variations to try
+            typeset -a token_candidates
+            token_candidates=("$token")
+
+            # Try progressively removing words from the end (e.g. "cleanshot-x" -> "cleanshot")
+            current_token="$token"
+            while [[ "$current_token" == *-* ]]; do
+                current_token="${current_token%-*}"
+                token_candidates+=("$current_token")
+            done
+
+            # Try variations without dots (e.g. "draw-io" -> "drawio")
+            token_no_dots=$(echo "$token" | tr -d '.')
+            if [[ "$token_no_dots" != "$token" ]]; then
+                token_candidates+=("$token_no_dots")
+            fi
+
+            # Try to find a match by testing each candidate with brew info
+            match_found=0
+            matched_token=""
+            for candidate in "${token_candidates[@]}"; do
+                if brew info --cask "$candidate" &>/dev/null; then
+                    matched_token="$candidate"
+                    match_found=1
+                    break
                 fi
-             fi
+            done
 
-              if [[ "$match_valid" -eq 1 ]]; then
-                 token="$brew_search"
-                 brew_url="https://formulae.brew.sh/cask/$token"
+            # If direct token attempts fail, fall back to brew search with validation
+            if [[ "$match_found" -eq 0 ]]; then
+                brew_search=$(brew search --cask "$clean_name" 2>/dev/null | grep -v "Warning" | head -n 1 || true)
+                if [[ -n "$brew_search" ]]; then
+                    # Normalize names for comparison
+                    norm_app=$(echo "$clean_name" | tr '[:upper:]' '[:lower:]' | tr -d ' -_.:')
+                    norm_result=$(echo "$brew_search" | tr '[:upper:]' '[:lower:]' | tr -d ' -_.:')
 
-                 if [[ "$ENABLE_VERSION_SCAN" -eq 1 ]]; then
-                     brew_version=$(brew info --cask "$token" | head -n 1 | awk '{print $3}')
-                     brew_status="${fg[yellow]}Found as${reset_color} (${fg[cyan]}$token${reset_color} ${fg[magenta]}$brew_version${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
-                 else
-                     brew_status="${fg[yellow]}Found as${reset_color} (${fg[cyan]}$token${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
-                 fi
-                 brew_available=1
-             else
+                    # Validate match using multiple criteria to reduce false positives
+                    match_valid=0
+
+                    # Check 1: Exact match after normalization
+                    if [[ "$norm_result" == "$norm_app" ]]; then
+                        match_valid=1
+                    # Check 2: Search result is prefix of app name (e.g. "cleanshot" is prefix of "cleanshotx")
+                    elif [[ "$norm_app" == "$norm_result"* ]] && [[ ${#norm_result} -ge 5 ]]; then
+                        match_valid=1
+                    # Check 3: App name is prefix of search result (e.g., app "Eve" matches "eve" cask)
+                    elif [[ "$norm_result" == "$norm_app"* ]]; then
+                        match_valid=1
+                    fi
+
+                    if [[ "$match_valid" -eq 1 ]]; then
+                        matched_token="$brew_search"
+                        match_found=1
+                    fi
+                fi
+            fi
+
+            # Display results based on what was found
+            if [[ "$match_found" -eq 1 ]]; then
+                token="$matched_token"
+                brew_url="https://formulae.brew.sh/cask/$token"
+
+                if [[ "$ENABLE_VERSION_SCAN" -eq 1 ]]; then
+                    brew_version=$(brew info --cask "$token" 2>/dev/null | head -n 1 | awk '{print $3}')
+                    brew_status="${fg[yellow]}Found as${reset_color} (${fg[cyan]}$token${reset_color} ${fg[magenta]}$brew_version${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
+                else
+                    brew_status="${fg[yellow]}Found as${reset_color} (${fg[cyan]}$token${reset_color}) ${fg[blue]}($brew_url)${reset_color}"
+                fi
+                brew_available=1
+            else
                 brew_status="${fg[red]}Not found${reset_color}"
                 brew_available=0
-             fi
+            fi
         fi
 
         echo "Options:"
