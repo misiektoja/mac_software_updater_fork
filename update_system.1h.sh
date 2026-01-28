@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.0</bitbar.version>
+# <bitbar.version>v1.3.2</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -188,6 +188,45 @@ calculate_hash() {
     shasum -a 256 "$1" | awk '{print $1}'
 }
 
+
+
+# Manual application version check via iTunes Lookup API
+# Uses native macOS 'plutil' for JSON parsing and auto-detects store region
+check_manual_app_version() {
+    local app_name="$1"
+    local app_id="$2"
+    local local_path="/Applications/$app_name.app"
+
+    # Skip if application does not exist locally
+    if [[ ! -d "$local_path" ]]; then return; fi
+
+    # Retrieve local version using system metadata
+    local local_ver=$(mdls -name kMDItemVersion -raw "$local_path")
+    if [[ "$local_ver" == "(null)" ]]; then return; fi
+
+    # Auto-detect system region (e.g., 'en_US' -> 'us', 'pl_PL' -> 'pl')
+    # fallback to 'us' if detection fails
+    local store_region=$(defaults read NSGlobalDomain AppleLocale 2>/dev/null | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
+    if [[ -z "$store_region" || ${#store_region} -ne 2 ]]; then
+        store_region="us"
+    fi
+
+    # Retrieve remote version from iTunes Lookup API
+    # 1. curl fetches JSON with dynamic country code
+    # 2. plutil extracts 'results.0.version' safely
+    local remote_ver=$(curl -sL "https://itunes.apple.com/lookup?id=$app_id&country=$store_region" \
+        | plutil -extract results.0.version raw -o - - 2>/dev/null)
+
+    # Validate if version was retrieved
+    if [[ -z "$remote_ver" ]]; then return; fi
+
+    # Compare versions using zsh is-at-least function
+    if [[ "$local_ver" != "$remote_ver" ]]; then
+        if ! is-at-least "$remote_ver" "$local_ver"; then
+            echo "$app_name|$local_ver|$remote_ver|$app_id"
+        fi
+    fi
+}
 
 
 # ==============================================================================
@@ -489,7 +528,36 @@ if command -v mas &> /dev/null; then
     count_mas=$(echo "$list_mas" | grep -E '^[[:space:]]*[0-9]+' | wc -l | tr -d ' ')
 fi
 
-total=$((count_brew + count_mas))
+# MANUAL CHECK FOR GHOST APPS
+# List of applications often missed by mas CLI
+typeset -A ghost_apps
+ghost_apps=(
+    "Numbers"     "409203825"
+    "Pages"       "409201541"
+    "Keynote"     "409183694"
+    "iMovie"      "408981434"
+    "GarageBand"  "682658836"
+    "Xcode"       "497799835"
+)
+
+manual_updates_list=""
+count_manual=0
+
+for app_name app_id in ${(kv)ghost_apps}; do
+    # Prevent duplicate checks if mas CLI already detected the update
+    if echo "$list_mas" | grep -q "$app_id"; then
+        continue
+    fi
+
+    result=$(check_manual_app_version "$app_name" "$app_id")
+    if [[ -n "$result" ]]; then
+        manual_updates_list+="$result"$'\n'
+        ((count_manual++))
+    fi
+done
+
+# Aggregate total updates count
+total=$((count_brew + count_mas + count_manual))
 
 # Collect installed stats
 # Casks
@@ -567,19 +635,31 @@ else
         echo "$list_brew" | while read -r line; do echo "$line | size=12 font=Monaco"; done
         echo "---"
     fi
+
     if [[ $count_mas -gt 0 ]]; then
         echo "App Store ($count_mas): | color=$COLOR_INFO size=12 sfimage=bag"
-        # Hide IDs in the update list as well - aggressively
-        # Processes the list of App Store updates by removing numeric app identifiers from the start of each line
-        # Appends SwiftBar formatting parameters to each line for consistent styling in the menu interface
-        # Utilizes regular expressions to isolate application names and versions for a cleaner visual output
+        # Hide IDs and clean up extra spaces for consistent styling
         echo "$list_mas" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//' | while read -r line; do
-            # Clean up potential extra spaces between name and version if needed
+            # Clean up potential extra spaces between name and version
             line=$(echo "$line" | sed -E 's/[[:space:]]{2,}/ /g')
             echo "$line | size=12 font=Monaco"
         done
     fi
+
+    # Manual updates for apps often missed by mas CLI (Ghost Apps)
+    if [[ $count_manual -gt 0 ]]; then
+        echo "Manual Update Required ($count_manual): | color=$COLOR_WARN size=12 sfimage=exclamationmark.triangle"
+        echo "$manual_updates_list" | while IFS='|' read -r name local remote id; do
+            if [[ -n "$name" ]]; then
+                echo "$name ($local -> $remote) | href='https://apps.apple.com/app/id$id' size=12 font=Monaco color=$COLOR_WARN"
+            fi
+        done
+        echo "---"
+    fi
+
 fi
+
+
 
 # Statistics Submenu
 echo "---"
@@ -657,4 +737,3 @@ echo "-- Change Update Frequency | bash='$script_path' param1=change_interval te
 echo "-- Change Terminal App | bash='$script_path' param1=change_terminal terminal=false refresh=false sfimage=terminal"
 echo "-- Check for Plugin Update | bash='$script_path' param1=check_updates terminal=false refresh=true sfimage=arrow.clockwise.icloud"
 echo "About | bash='$script_path' param1=about_dialog terminal=false sfimage=info.circle"
-echo "Quit SwiftBar | bash='osascript' param1=-e param2='quit app \"SwiftBar\"' terminal=false sfimage=xmark.circle"
