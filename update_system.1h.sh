@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.6</bitbar.version>
+# <bitbar.version>v1.3.7</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -435,6 +435,8 @@ fi
 
 # Launch Update in Terminal
 if [[ "$1" == "launch_update" ]]; then
+    # Force reload config to ensure latest terminal choice is used
+    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
     launch_in_terminal "$0" "$2"
     exit 0
 fi
@@ -525,12 +527,16 @@ if [[ "$1" == "run" ]]; then
 			raw_mas_outdated=$(mas outdated)
 			for line in "${(@f)raw_mas_outdated}"; do
 				[[ -z "$line" ]] && continue
+
+				# Use sed to safely extract ID, version, and name
+				# Extract ID (first word)
 				app_id=${line%% *}
-				# Parentheses were escaped here previously
-				new_ver=${${line##*\(}%%\)*}
-				temp=${line#* }
-                # Escape parenthesis here as well (Mas section)
-				app_name=${temp% \(* }
+
+				# Extract version (content within the last parentheses)
+				new_ver=$(echo "$line" | sed -E 's/.*\(//; s/\)$//')
+
+				# Extract name (remove leading ID and trailing version info, then trim)
+				app_name=$(echo "$line" | sed -E "s/^$app_id[[:space:]]+//; s/[[:space:]]*\(.*\)$//" | xargs)
 
 				local_ver="?"
 				if [[ -d "/Applications/$app_name.app" ]]; then
@@ -715,6 +721,11 @@ if [[ -f "$HISTORY_FILE" ]]; then
         [[ "$log_src" == "cask" ]] && icon="square.stack.3d.up"
         [[ "$log_src" == "mas" ]] && icon="bag"
 
+        # Clean up log_name for display (fixes corrupted entries like "App (Ver -> Ver)")
+        # Removes everything starting from the first open parenthesis (escaped with backslash)
+        clean_name="${log_name%% \(*}"
+        clean_name="$(echo "$clean_name" | xargs)"
+
         # Truncate versions
         short_old=$(truncate_ver "$log_old")
         short_new=$(truncate_ver "$log_new")
@@ -724,13 +735,15 @@ if [[ -f "$HISTORY_FILE" ]]; then
         case "$log_src" in
             "brew") link_param=" href='https://formulae.brew.sh/formula/${log_name}'" ;;
             "cask") link_param=" href='https://formulae.brew.sh/cask/${log_name}'" ;;
+            "mas")  link_param=" href='https://apps.apple.com/search?term=${clean_name// /%20}'" ;;
         esac
 
         # Format date header line
         header_line="---- ${log_date_str}: | color=$COLOR_INFO size=11 sfimage=calendar"
 
         # Format item line with visual indentation (spaces) instead of date
-        item_line="----    ${log_name} [${short_old} → ${short_new}] | size=11 sfimage=$icon font=Monaco${link_param}"
+        # Use clean_name instead of raw log_name
+        item_line="----    ${clean_name} [${short_old} → ${short_new}] | size=11 sfimage=$icon font=Monaco${link_param}"
 
         # Populate 7 Days Bucket
         if [[ $diff -le 604800 ]]; then
