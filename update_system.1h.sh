@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.8</bitbar.version>
+# <bitbar.version>v1.3.9</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -676,7 +676,6 @@ if [[ "$1" == "run" ]]; then
 
 				# Add to buffer
 				update_log_buffer+=("$timestamp|mas|$app_name|$old_ver|$new_ver|$app_id")
-				#update_log_buffer+=("$timestamp|mas|$app_name|$old_ver|$new_ver")
 				((++count_mas_pending))
 			done
 		fi
@@ -882,7 +881,6 @@ current_time=$(date +%s)
 if [[ -f "$HISTORY_FILE" ]]; then
     # Read file in reverse order (newest first) using sed
     while IFS='|' read -r log_time log_src log_name log_old log_new log_id; do
-    #while IFS='|' read -r log_time log_src log_name log_old log_new; do
 
         # Skip legacy entries, invalid timestamps
         if [[ -z "$log_time" || ! "$log_time" =~ ^[0-9]+$ ]]; then continue; fi
