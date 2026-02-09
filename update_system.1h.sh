@@ -222,6 +222,19 @@ truncate_ver() {
     fi
 }
 
+# Clean version string by removing commit hashes (40-char hex after comma)
+clean_version() {
+    local ver="$1"
+    if [[ "$ver" == *,* ]]; then
+        local suffix="${ver#*,}"
+        if [[ ${#suffix} -eq 40 && "$suffix" =~ ^[0-9a-fA-F]+$ ]]; then
+            echo "${ver%%,*}"
+            return
+        fi
+    fi
+    echo "$ver"
+}
+
 # Manual application version check via iTunes Lookup API
 # Redundant check: tries mdls first, falls back to defaults read (Info.plist)
 check_manual_app_version() {
@@ -974,11 +987,18 @@ else
             if [[ "$line" == *"!="* ]]; then
                 pkg_type="cask"
                 link="https://formulae.brew.sh/cask/$name"
+                # Clean cask display: extract and clean versions (remove commit hashes)
+                old_ver_raw=${${line#*\(}%%\)*}
+                new_ver_raw=${line##* }
+                old_ver_clean=$(clean_version "$old_ver_raw")
+                new_ver_clean=$(clean_version "$new_ver_raw")
+                display_line="$name ($old_ver_clean) != $new_ver_clean"
             else
                 pkg_type="brew"
                 link="https://formulae.brew.sh/formula/$name"
+                display_line="$line"
             fi
-            echo "$line | size=12 font=Monaco color=$COLOR_INFO"
+            echo "$display_line | size=12 font=Monaco color=$COLOR_INFO"
             echo "-- Update $name | bash='$script_path' param1=update_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=arrow.down.circle"
             echo "-- Ignore $name | bash='$script_path' param1=ignore_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=eye.slash"
         done
