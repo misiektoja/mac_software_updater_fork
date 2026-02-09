@@ -684,8 +684,29 @@ if [[ "$1" == "run" ]]; then
 
 		if command -v mas &> /dev/null; then
 			echo "🍎 Updating App Store Applications ($count_mas_pending pending)..."
-			# Prevent script exit if mas upgrade fails or warns
-			mas upgrade || true
+
+			# Check if we have any ignored MAS apps
+			has_ignored_mas=false
+			if [[ -f "$IGNORED_FILE" ]] && grep -q "^mas|" "$IGNORED_FILE" 2>/dev/null; then
+				has_ignored_mas=true
+			fi
+
+			if [[ "$has_ignored_mas" == "true" ]]; then
+				# Update each non-ignored app individually to respect ignore list
+				echo "   (Updating apps individually to respect ignore list)"
+				mas outdated 2>/dev/null | while read -r line; do
+					[[ ! "$line" =~ ^[[:space:]]*[0-9]+ ]] && continue
+					app_id=${line%% *}
+					# Skip if this app is in our ignore list
+					if grep -q "^mas|${app_id}$" "$IGNORED_FILE" 2>/dev/null; then
+						continue
+					fi
+					mas install "$app_id" || true
+				done
+			else
+				# No ignored apps, use faster bulk upgrade
+				mas upgrade || true
+			fi
 		fi
 
 		# Write snapshot to history log if updates occurred
