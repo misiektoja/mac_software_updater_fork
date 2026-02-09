@@ -37,6 +37,7 @@ HISTORY_FILE="$APP_DIR/update_history.log"
 CONFIG_FILE="$APP_DIR/settings.conf"
 ETAG_FILE="$APP_DIR/.plugin_etag"
 PENDING_FLAG="$APP_DIR/.plugin_update_pending"
+IGNORED_FILE="$APP_DIR/ignored_apps.conf"
 
 # Ensure directories exist
 mkdir -p "$APP_DIR"
@@ -105,6 +106,27 @@ fi
 # Necessary for handling file paths or arguments containing special characters to prevent syntax breakage in the menu.
 swiftbar_sq_escape() {
   print -r -- "${1//\'/\'\\\'\'}"
+}
+
+# Check if an app is ignored (cask or mas)
+# Usage: is_ignored "type" "identifier"
+is_ignored() {
+    local type="$1" id="$2"
+    [[ -f "$IGNORED_FILE" ]] && grep -q "^${type}|${id}$" "$IGNORED_FILE"
+}
+
+# Add app to ignore list
+add_ignored() {
+    local type="$1" id="$2"
+    if ! is_ignored "$type" "$id"; then
+        echo "${type}|${id}" >> "$IGNORED_FILE"
+    fi
+}
+
+# Remove app from ignore list
+remove_ignored() {
+    local type="$1" id="$2"
+    [[ -f "$IGNORED_FILE" ]] && sed -i '' "/^${type}|${id}$/d" "$IGNORED_FILE"
 }
 
 # Launch update script in the configured terminal app
@@ -421,6 +443,53 @@ EOF
     exit 0
 fi
 
+# Update Single App (launches in user's configured terminal via launch_in_terminal)
+if [[ "$1" == "update_app" ]]; then
+    # Force reload config to ensure latest terminal choice is used
+    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
+    # Use launch_in_terminal with special mode: single_<type>_<id>
+    launch_in_terminal "$0" "single $2 $3"
+    exit 0
+fi
+
+# Ignore App
+if [[ "$1" == "ignore_app" ]]; then
+    type="$2"  # brew, cask, or mas
+    id="$3"    # package name or app ID
+    name="${4:-$id}"  # display name (fallback to id)
+
+    case "$type" in
+        "brew")
+            brew pin "$id" 2>/dev/null
+            ;;
+        "cask"|"mas")
+            add_ignored "$type" "$id"
+            ;;
+    esac
+    osascript -e "display dialog \"$name has been ignored.\" & return & return & \"It will no longer appear in the updates list.\" buttons {\"OK\"} default button \"OK\" with title \"App Ignored\" with icon note giving up after 5"
+    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+    exit 0
+fi
+
+# Unignore App
+if [[ "$1" == "unignore_app" ]]; then
+    type="$2"
+    id="$3"
+    name="${4:-$id}"  # display name (fallback to id)
+
+    case "$type" in
+        "brew")
+            brew unpin "$id" 2>/dev/null
+            ;;
+        "cask"|"mas")
+            remove_ignored "$type" "$id"
+            ;;
+    esac
+    osascript -e "display dialog \"$name has been restored.\" & return & return & \"It will now appear in the updates list.\" buttons {\"OK\"} default button \"OK\" with title \"App Restored\" with icon note giving up after 5"
+    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+    exit 0
+fi
+
 # About Dialog
 if [[ "$1" == "about_dialog" ]]; then
     #BUTTON=$(osascript -e 'on run {ver}' -e 'tell application "System Events"' -e 'activate' -e 'set myResult to display dialog "Mac Software Updater" & return & "Version " & ver & return & return & "An automated toolkit to monitor and update Homebrew & App Store applications." & return & return & "Created by: pr-fuzzylogic" with title "About" buttons {"Visit Codeberg", "Visit GitHub", "Close"} default button "Close" cancel button "Close" with icon note' -e 'return button returned of myResult' -e 'end tell' -e 'end run' -- "$VERSION")
@@ -454,6 +523,32 @@ if [[ "$1" == "run" ]]; then
 
     set -e
     set -o pipefail
+
+    # --- SINGLE APP UPDATE ---
+    if [[ "$MODE" == "single" ]]; then
+        type="$3"  # brew, cask, or mas
+        id="$4"    # package name or app ID
+
+        echo "🚀 Updating $id..."
+        echo "---------------------------"
+
+        case "$type" in
+            "brew"|"cask")
+                brew upgrade "$id"
+                ;;
+            "mas")
+                mas install "$id"
+                ;;
+        esac
+
+        echo "---------------------------"
+        echo "✅ Update Complete!"
+        echo "🔄 Refreshing SwiftBar..."
+        open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+        echo "Done! Press any key to close."
+        read -k1
+        exit 0
+    fi
 
     # --- PLUGIN UPDATE SECTION ---
     if [[ "$MODE" == "all" || "$MODE" == "plugin" ]]; then
@@ -625,15 +720,37 @@ fi
 update_available=0
 [[ -f "$PENDING_FLAG" ]] && update_available=1
 
-# Check Homebrew for updates
+# Check Homebrew for updates (filter pinned formulae and ignored casks)
 list_brew=$(brew outdated --verbose --greedy | grep -v "latest) != latest" | grep -v "^font-")
+
+# Filter out pinned formulae (native brew pin)
+pinned_formulae=$(brew list --pinned 2>/dev/null | tr '\n' '|')
+if [[ -n "$pinned_formulae" ]]; then
+    list_brew=$(echo "$list_brew" | grep -vE "^(${pinned_formulae%|}) ")
+fi
+
+# Filter out ignored casks from our custom list
+if [[ -f "$IGNORED_FILE" ]]; then
+    while IFS='|' read -r ig_type ig_id; do
+        [[ "$ig_type" == "cask" ]] && list_brew=$(echo "$list_brew" | grep -v "^$ig_id ")
+    done < "$IGNORED_FILE"
+fi
+
 count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]' || true)
 
-# Check App Store for updates
+# Check App Store for updates (filter ignored MAS apps)
 list_mas=""
 count_mas=0
 if command -v mas &> /dev/null; then
     list_mas=$(mas outdated)
+
+    # Filter out ignored MAS apps
+    if [[ -f "$IGNORED_FILE" ]]; then
+        while IFS='|' read -r ig_type ig_id; do
+            [[ "$ig_type" == "mas" ]] && list_mas=$(echo "$list_mas" | grep -v "^$ig_id ")
+        done < "$IGNORED_FILE"
+    fi
+
     count_mas=$(echo "$list_mas" | grep -E '^[[:space:]]*[0-9]+' | wc -l | tr -d ' ')
 fi
 
@@ -827,17 +944,34 @@ else
 
     if [[ $count_brew -gt 0 ]]; then
         echo "Homebrew ($count_brew): | color=$COLOR_INFO size=12 sfimage=shippingbox"
-        echo "$list_brew" | while read -r line; do echo "$line | size=12 font=Monaco"; done
+        echo "$list_brew" | while read -r line; do
+            name=${line%% *}
+            # Determine type: cask (contains !=) or formula
+            if [[ "$line" == *"!="* ]]; then
+                pkg_type="cask"
+                link="https://formulae.brew.sh/cask/$name"
+            else
+                pkg_type="brew"
+                link="https://formulae.brew.sh/formula/$name"
+            fi
+            echo "$line | size=12 font=Monaco color=$COLOR_INFO"
+            echo "-- Update $name | bash='$script_path' param1=update_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=arrow.down.circle"
+            echo "-- Ignore $name | bash='$script_path' param1=ignore_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=eye.slash"
+        done
         echo "---"
     fi
 
     if [[ $count_mas -gt 0 ]]; then
         echo "App Store ($count_mas): | color=$COLOR_INFO size=12 sfimage=bag"
-        # Hide IDs and clean up extra spaces for consistent styling
-        echo "$list_mas" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//' | while read -r line; do
-            # Clean up potential extra spaces between name and version
-            line=$(echo "$line" | sed -E 's/[[:space:]]{2,}/ /g')
-            echo "$line | size=12 font=Monaco"
+        echo "$list_mas" | while read -r line; do
+            app_id=${line%% *}
+            # Clean display line: remove ID, clean extra spaces
+            display_line=$(echo "$line" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//' | sed -E 's/[[:space:]]{2,}/ /g')
+            # Extract app name (remove version info in parentheses)
+            app_name=$(echo "$display_line" | sed -E 's/[[:space:]]*\([^)]+\)$//')
+            echo "$display_line | size=12 font=Monaco color=$COLOR_INFO"
+            echo "-- Update $app_name | bash='$script_path' param1=update_app param2=mas param3='$app_id' param4='$app_name' terminal=false refresh=true sfimage=arrow.down.circle"
+            echo "-- Ignore $app_name | bash='$script_path' param1=ignore_app param2=mas param3='$app_id' param4='$app_name' terminal=false refresh=true sfimage=eye.slash"
         done
     fi
 
@@ -933,6 +1067,48 @@ echo "---"
 echo "Preferences | sfimage=gearshape"
 echo "-- Change Update Frequency | bash='$script_path' param1=change_interval terminal=false refresh=true sfimage=hourglass"
 echo "-- Change Terminal App | bash='$script_path' param1=change_terminal terminal=false refresh=false sfimage=terminal"
+echo "-- Manage Ignored Apps | sfimage=eye.slash"
+
+# Show pinned brew formulae
+pinned_list=$(brew list --pinned 2>/dev/null)
+if [[ -n "$pinned_list" ]]; then
+    echo "---- Pinned Formulae: | color=$COLOR_INFO size=11"
+    echo "$pinned_list" | while read -r name; do
+        echo "----   $name | size=11 font=Monaco"
+        echo "------   Unpin | bash='$script_path' param1=unignore_app param2=brew param3='$name' param4='$name' terminal=false refresh=true sfimage=eye"
+    done
+fi
+
+# Show custom ignored apps (casks + mas)
+if [[ -f "$IGNORED_FILE" ]]; then
+    ignored_casks=$(grep "^cask|" "$IGNORED_FILE" 2>/dev/null)
+    ignored_mas=$(grep "^mas|" "$IGNORED_FILE" 2>/dev/null)
+
+    if [[ -n "$ignored_casks" ]]; then
+        echo "---- Ignored Casks: | color=$COLOR_INFO size=11"
+        echo "$ignored_casks" | while IFS='|' read -r _ cask_name; do
+            echo "----   $cask_name | size=11 font=Monaco"
+            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=cask param3='$cask_name' param4='$cask_name' terminal=false refresh=true sfimage=eye"
+        done
+    fi
+
+    if [[ -n "$ignored_mas" ]]; then
+        echo "---- Ignored App Store Apps: | color=$COLOR_INFO size=11"
+        echo "$ignored_mas" | while IFS='|' read -r _ mas_id; do
+            # Get app name from mas list
+            mas_name=$(mas list 2>/dev/null | grep "^$mas_id " | sed -E 's/^[0-9]+[[:space:]]+//' | xargs)
+            [[ -z "$mas_name" ]] && mas_name="ID: $mas_id"
+            echo "----   $mas_name | size=11 font=Monaco"
+            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=mas param3='$mas_id' param4='$mas_name' terminal=false refresh=true sfimage=eye"
+        done
+    fi
+fi
+
+# Show message if nothing is ignored
+if [[ -z "$pinned_list" ]] && { [[ ! -f "$IGNORED_FILE" ]] || [[ ! -s "$IGNORED_FILE" ]]; }; then
+    echo "---- No ignored apps | color=$COLOR_INFO size=11"
+fi
+
 echo "-----"
 echo "-- Check for Plugin Update | bash='$script_path' param1=check_updates terminal=false refresh=true sfimage=sparkles"
 echo "About | bash='$script_path' param1=about_dialog terminal=false sfimage=info.circle"
