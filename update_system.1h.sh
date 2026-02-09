@@ -553,7 +553,8 @@ if [[ "$1" == "run" ]]; then
 				fi
 
 				# Add to buffer
-				update_log_buffer+=("$timestamp|mas|$app_name|$old_ver|$new_ver")
+				update_log_buffer+=("$timestamp|mas|$app_name|$old_ver|$new_ver|$app_id")
+				#update_log_buffer+=("$timestamp|mas|$app_name|$old_ver|$new_ver")
 				((++count_mas_pending))
 			done
 		fi
@@ -715,7 +716,8 @@ current_time=$(date +%s)
 
 if [[ -f "$HISTORY_FILE" ]]; then
     # Read file in reverse order (newest first) using sed
-    while IFS='|' read -r log_time log_src log_name log_old log_new; do
+    while IFS='|' read -r log_time log_src log_name log_old log_new log_id; do
+    #while IFS='|' read -r log_time log_src log_name log_old log_new; do
 
         # Skip legacy entries, invalid timestamps
         if [[ -z "$log_time" || ! "$log_time" =~ ^[0-9]+$ ]]; then continue; fi
@@ -746,7 +748,14 @@ if [[ -f "$HISTORY_FILE" ]]; then
         case "$log_src" in
             "brew") link_param=" href='https://formulae.brew.sh/formula/${log_name}'" ;;
             "cask") link_param=" href='https://formulae.brew.sh/cask/${log_name}'" ;;
-            "mas")  link_param=" href='https://apps.apple.com/search?term=${clean_name// /%20}'" ;;
+            "mas")
+                # Checks if ID exists for backward compatibility
+                if [[ -n "$log_id" ]]; then
+                    link_param=" href='https://apps.apple.com/app/id${log_id}'"
+                else
+                    link_param=" href='https://apps.apple.com/search?term=${clean_name// /%20}'"
+                fi
+                ;;
         esac
 
         # Format date header line
