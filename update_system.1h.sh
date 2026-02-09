@@ -22,6 +22,8 @@ zmodload zsh/datetime
 
 # Set standard locale to avoid parsing errors with grep or sort on different system languages
 export LC_ALL=C
+# Suppress mas CLI Spotlight auto-indexing warning
+export MAS_NO_AUTO_INDEX=1
 umask 077
 
 # Extract version from the first 5 lines of a file, defaults to "Unknown"
@@ -447,8 +449,8 @@ fi
 if [[ "$1" == "update_app" ]]; then
     # Force reload config to ensure latest terminal choice is used
     if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
-    # Use launch_in_terminal with special mode: single_<type>_<id>
-    launch_in_terminal "$0" "single $2 $3"
+    # Use launch_in_terminal with special mode: single <type> <id> <name>
+    launch_in_terminal "$0" "single $2 $3 $4"
     exit 0
 fi
 
@@ -528,8 +530,9 @@ if [[ "$1" == "run" ]]; then
     if [[ "$MODE" == "single" ]]; then
         type="$3"  # brew, cask, or mas
         id="$4"    # package name or app ID
+        name="${5:-$id}"  # display name (fallback to id)
 
-        echo "🚀 Updating $id..."
+        echo "🚀 Updating $name..."
         echo "---------------------------"
 
         case "$type" in
