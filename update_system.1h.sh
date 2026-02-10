@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.9.5</bitbar.version>
+# <bitbar.version>v1.3.9.6</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -51,12 +51,15 @@ if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE" 2>/dev/null || true
 fi
 
+# Set default update branch if not configured
+UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
+
 # Extract version dynamically from the first 5 lines of the script. Needed for User-Agent and About
 VERSION=$(extract_version "$SCRIPT_FILE")
 
 # Failover & Network Config
-URL_PRIMARY_BASE="https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/main"
-URL_BACKUP_BASE="https://codeberg.org/pr-fuzzylogic/mac_software_updater/raw/branch/main"
+URL_PRIMARY_BASE="https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/$UPDATE_BRANCH"
+URL_BACKUP_BASE="https://codeberg.org/pr-fuzzylogic/mac_software_updater/raw/branch/$UPDATE_BRANCH"
 USER_AGENT="MacSoftwareUpdater/$VERSION"
 PROJECT_URL="https://github.com/pr-fuzzylogic/mac_software_updater"
 PROJECT_URL_CB="https://codeberg.org/pr-fuzzylogic/mac_software_updater"
@@ -159,40 +162,47 @@ end tell
 EOF
             else
                 # Fallback to Terminal if iTerm2 not found
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
             fi
             ;;
         "Warp")
             # Warp terminal
             if [[ -d "/Applications/Warp.app" ]]; then
+                # Force focus first
+                osascript -e 'tell application "Warp" to activate'
                 open -a Warp "$script_path" --args run
             else
-                # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+                # Fallback
+                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
             fi
             ;;
         "Alacritty")
             # Alacritty terminal
             if [[ -d "/Applications/Alacritty.app" ]]; then
+                # Force focus first
+                osascript -e 'tell application "Alacritty" to activate'
                 open -a Alacritty --args -e zsh -c "$cmd; exec zsh"
             else
                 # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
             fi
             ;;
         "Ghostty")
             # Ghostty terminal
             if [[ -d "/Applications/Ghostty.app" ]]; then
+                # Force focus first
+                osascript -e 'tell application "Ghostty" to activate'
                 # Correctly pass arguments separately to avoid single-string interpretation error
                 open -na Ghostty --args -e "$script_path" "run" "$mode"
             else
                 # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
             fi
             ;;
         *)
             # Default: Apple Terminal
-            osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+            # Force focus first
+            osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
             ;;
     esac
 }
@@ -476,12 +486,87 @@ EOF
     exit 0
 fi
 
+# Change Update Branch (Stable/Beta)
+if [[ "$1" == "change_branch" ]]; then
+    # Detect current state for default selection
+    CURRENT="${UPDATE_BRANCH:-main}"
+    DEFAULT_ITEM="Stable (Main)"
+    if [[ "$CURRENT" == "develop" ]]; then
+        DEFAULT_ITEM="Beta (Develop)"
+    fi
+
+    # Show selection dialog
+    SELECTION=$(osascript -e "choose from list {\"Stable (Main)\", \"Beta (Develop)\"} with title \"Update Channel\" with prompt \"Select update source:\" default items \"$DEFAULT_ITEM\"")
+
+    if [[ "$SELECTION" == "false" ]]; then
+        exit 0
+    fi
+
+    # Map selection to branch name
+    NEW_BRANCH="main"
+    if [[ "$SELECTION" == "Beta (Develop)" ]]; then
+        NEW_BRANCH="develop"
+    fi
+
+    # Check if change is actually needed
+    if [[ "$NEW_BRANCH" == "$CURRENT" ]]; then
+        osascript -e "display notification \"Already on $SELECTION channel.\" with title \"Mac Software Updater\""
+        exit 0
+    fi
+
+    echo "⚙️ Switching to: $SELECTION..."
+
+    # Update Configuration File
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        mkdir -p "$APP_DIR"
+        echo "UPDATE_BRANCH=\"$NEW_BRANCH\"" > "$CONFIG_FILE"
+    else
+        if grep -q "^UPDATE_BRANCH=" "$CONFIG_FILE" 2>/dev/null; then
+            sed -i '' "s/^UPDATE_BRANCH=.*/UPDATE_BRANCH=\"$NEW_BRANCH\"/" "$CONFIG_FILE"
+        else
+            echo "UPDATE_BRANCH=\"$NEW_BRANCH\"" >> "$CONFIG_FILE"
+        fi
+    fi
+
+    # Update URLs in memory immediately
+    URL_PRIMARY_BASE="https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/$NEW_BRANCH"
+    URL_BACKUP_BASE="https://codeberg.org/pr-fuzzylogic/mac_software_updater/raw/branch/$NEW_BRANCH"
+
+    # Force Download and Overwrite
+    TEMP_TARGET="$(mktemp "${TMPDIR:-/tmp}/update_system.branch_switch.XXXXXX")"
+    trap 'rm -f "$TEMP_TARGET"' EXIT
+
+    echo "⬇️ Downloading version from $NEW_BRANCH..."
+
+    if download_with_failover "update_system.1h.sh" "$TEMP_TARGET"; then
+        if grep -q "bitbar.title" "$TEMP_TARGET"; then
+            mv "$TEMP_TARGET" "$0" && chmod +x "$0"
+
+            # Clean up flags
+            rm -f "$PENDING_FLAG"
+            rm -f "$ETAG_FILE"
+
+            osascript -e "display notification \"Switched to $SELECTION channel.\" with title \"Mac Software Updater\""
+            open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+        else
+            echo "❌ Error: Downloaded file corrupt."
+            osascript -e "display notification \"Error: Downloaded file corrupt.\" with title \"Mac Software Updater\""
+        fi
+    else
+        echo "❌ Error: Could not download from $NEW_BRANCH."
+        osascript -e "display notification \"Connection failed. Reverting config.\" with title \"Mac Software Updater\""
+        sed -i '' "s/^UPDATE_BRANCH=.*/UPDATE_BRANCH=\"$CURRENT\"/" "$CONFIG_FILE"
+    fi
+    exit 0
+fi
+
 # Update Single App (launches in user's configured terminal via launch_in_terminal)
 if [[ "$1" == "update_app" ]]; then
     # Force reload config to ensure latest terminal choice is used
     if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
-    # Use launch_in_terminal with special mode: single <type> <id> <name>
-    launch_in_terminal "$0" "single $2 $3 $4"
+    # Use launch_in_terminal with special mode: single <type> <id> <name> <old_ver> <new_ver>
+    # Allow $5 and $6 to be empty strings if version info is missing
+    launch_in_terminal "$0" "single '$2' '$3' '$4' '$5' '$6'"
     exit 0
 fi
 
@@ -562,8 +647,10 @@ if [[ "$1" == "run" ]]; then
         type="$3"  # brew, cask, or mas
         id="$4"    # package name or app ID
         name="${5:-$id}"  # display name (fallback to id)
+        old_ver="${6:-?}"
+        new_ver="${7:-?}"
 
-        echo "🚀 Updating $name..."
+        echo "🚀 Updating $name ($old_ver -> $new_ver)..."
         echo "---------------------------"
 
         case "$type" in
@@ -575,6 +662,13 @@ if [[ "$1" == "run" ]]; then
                 mas upgrade "$id"
                 ;;
         esac
+
+        # Log update to history
+        timestamp=$(date +%s)
+        # Format: timestamp|source|name|old_ver|new_ver|id
+        if echo "$timestamp|$type|$name|$old_ver|$new_ver|$id" >> "$HISTORY_FILE"; then
+            echo "📝 Added to history log."
+        fi
 
         echo "---------------------------"
         echo "✅ Update Complete!"
@@ -1048,7 +1142,7 @@ else
                 display_line="$line"
             fi
             echo "$display_line | size=12 font=Monaco color=$COLOR_INFO"
-            echo "-- Update $name | bash='$script_path' param1=update_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=arrow.down.circle"
+            echo "-- Update $name | bash='$script_path' param1=update_app param2=$pkg_type param3='$name' param4='$name' param5='$old_ver_clean' param6='$new_ver_clean' terminal=false refresh=true sfimage=arrow.down.circle"
             echo "-- Ignore $name | bash='$script_path' param1=ignore_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=eye.slash"
         done
         echo "---"
@@ -1060,10 +1154,24 @@ else
             app_id=${line%% *}
             # Clean display line: remove ID, clean extra spaces
             display_line=$(echo "$line" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//' | sed -E 's/[[:space:]]{2,}/ /g')
+
             # Extract app name (remove version info in parentheses)
             app_name=$(echo "$display_line" | sed -E 's/[[:space:]]*\([^)]+\)$//')
+
+            # Extract versions for history logging
+            # Format usually: Name (OldVer -> NewVer)
+            ver_info=$(echo "$display_line" | sed -E 's/.*\(//; s/\)$//')
+            if [[ "$ver_info" == *"->"* ]]; then
+                old_ver=${ver_info%% ->*}
+                new_ver=${ver_info##*-> }
+            else
+                old_ver="?"
+                new_ver="$ver_info"
+            fi
+
             echo "$display_line | size=12 font=Monaco color=$COLOR_INFO"
-            echo "-- Update $app_name | bash='$script_path' param1=update_app param2=mas param3='$app_id' param4='$app_name' terminal=false refresh=true sfimage=arrow.down.circle"
+            # Added param5 and param6 for version logging
+            echo "-- Update $app_name | bash='$script_path' param1=update_app param2=mas param3='$app_id' param4='$app_name' param5='$old_ver' param6='$new_ver' terminal=false refresh=true sfimage=arrow.down.circle"
             echo "-- Ignore $app_name | bash='$script_path' param1=ignore_app param2=mas param3='$app_id' param4='$app_name' terminal=false refresh=true sfimage=eye.slash"
         done
     fi
@@ -1210,6 +1318,17 @@ else
     # Parent menu item (Disabled/Grayed out)
     echo "-- Manage Ignored Apps (Empty) | color=#808080 sfimage=eye.slash"
 fi
+
+# Branch selection menu item
+BRANCH_LABEL="Stable"
+BRANCH_ICON="network"
+
+if [[ "$UPDATE_BRANCH" == "develop" ]]; then
+    BRANCH_LABEL="Beta (Dev)"
+    BRANCH_ICON="hammer.circle"
+fi
+
+echo "-- Channel: $BRANCH_LABEL | bash='$script_path' param1=change_branch terminal=false refresh=true sfimage=$BRANCH_ICON"
 
 echo "-----"
 echo "-- Check for Plugin Update | bash='$script_path' param1=check_updates terminal=false refresh=true sfimage=sparkles"
