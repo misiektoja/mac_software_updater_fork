@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.9</bitbar.version>
+# <bitbar.version>v1.3.9.5</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -114,21 +114,28 @@ swiftbar_sq_escape() {
 # Usage: is_ignored "type" "identifier"
 is_ignored() {
     local type="$1" id="$2"
-    [[ -f "$IGNORED_FILE" ]] && grep -q "^${type}|${id}$" "$IGNORED_FILE"
+    # Use grep -E to match ID followed by EOL ($) OR a pipe (|)
+    # This ensures it detects the app even if a name is stored in the 3rd column
+    [[ -f "$IGNORED_FILE" ]] && grep -qE "^${type}\|${id}(\||$)" "$IGNORED_FILE"
 }
 
-# Add app to ignore list
+# Add app to ignore list (Supports: type|id|name)
 add_ignored() {
-    local type="$1" id="$2"
+    local type="$1" id="$2" name="${3:-$id}"
+    # Remove pipes from name to prevent parsing errors
+    name="${name//|/}"
     if ! is_ignored "$type" "$id"; then
-        echo "${type}|${id}" >> "$IGNORED_FILE"
+        echo "${type}|${id}|${name}" >> "$IGNORED_FILE"
     fi
 }
 
-# Remove app from ignore list
+# Remove app from ignore list (Matches type|id ONLY)
 remove_ignored() {
-    local type="$1" id="$2"
-    [[ -f "$IGNORED_FILE" ]] && sed -i '' "/^${type}|${id}$/d" "$IGNORED_FILE"
+    local type="$1"
+    local id="$2"
+    # Delete line starting with type|id followed by pipe or EOL
+    # This ensures strict matching of ID regardless of whether a name suffix exists
+    [[ -f "$IGNORED_FILE" ]] && sed -i '' -E "/^${type}\|${id}(\||$)/d" "$IGNORED_FILE"
 }
 
 # Launch update script in the configured terminal app
@@ -489,7 +496,7 @@ if [[ "$1" == "ignore_app" ]]; then
             brew pin "$id" 2>/dev/null
             ;;
         "cask"|"mas")
-            add_ignored "$type" "$id"
+            add_ignored "$type" "$id" "$name"
             ;;
     esac
     osascript -e "display dialog \"$name has been ignored.\" & return & return & \"It will no longer appear in the updates list.\" buttons {\"OK\"} default button \"OK\" with title \"App Ignored\" with icon note giving up after 5"
@@ -564,7 +571,8 @@ if [[ "$1" == "run" ]]; then
                 brew upgrade "$id"
                 ;;
             "mas")
-                mas install "$id"
+                # Use upgrade instead of install to force update for existing apps
+                mas upgrade "$id"
                 ;;
         esac
 
@@ -722,7 +730,7 @@ if [[ "$1" == "run" ]]; then
 					[[ ! "$line" =~ ^[[:space:]]*[0-9]+ ]] && continue
 					app_id=${line%% *}
 					# Skip if this app is in our ignore list
-					if grep -q "^mas|${app_id}$" "$IGNORED_FILE" 2>/dev/null; then
+					if grep -qE "^mas\|${app_id}(\||$)" "$IGNORED_FILE" 2>/dev/null; then
 						continue
 					fi
 					mas install "$app_id" || true
@@ -777,12 +785,20 @@ if [[ -n "$pinned_formulae" ]]; then
     list_brew=$(echo "$list_brew" | grep -vE "^(${pinned_formulae%|}) ")
 fi
 
-# Filter out ignored casks from our custom list
-if [[ -f "$IGNORED_FILE" ]]; then
-    while IFS='|' read -r ig_type ig_id; do
-        [[ "$ig_type" == "cask" ]] && list_brew=$(echo "$list_brew" | grep -v "^$ig_id ")
-    done < "$IGNORED_FILE"
-fi
+# Filter out ignored CASKS from our custom list
+    if [[ -f "$IGNORED_FILE" ]]; then
+        # Read into _junk to discard the 3rd column (Name)
+        while IFS='|' read -r ig_type ig_id _junk; do
+            # Sanitize inputs: remove all whitespace/newlines
+            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
+            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
+
+            if [[ "$ig_type" == "cask" ]]; then
+                # Filter specific cask from the list (match start of line + ID + space)
+                list_brew=$(echo "$list_brew" | grep -vE "^${ig_id} ")
+            fi
+        done < "$IGNORED_FILE"
+    fi
 
 count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]' || true)
 
@@ -794,8 +810,17 @@ if command -v mas &> /dev/null; then
 
     # Filter out ignored MAS apps
     if [[ -f "$IGNORED_FILE" ]]; then
-        while IFS='|' read -r ig_type ig_id; do
-            [[ "$ig_type" == "mas" ]] && list_mas=$(echo "$list_mas" | grep -v "^$ig_id ")
+        # Read into _junk to discard the 3rd column (Name) and avoid dirty ID variable
+        while IFS='|' read -r ig_type ig_id _junk; do
+            # Sanitize inputs: remove all whitespace/newlines from type and ID
+            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
+            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
+
+            # Use grep -vE with regex to match ID specifically at start of line
+            # ^[[:space:]]* handles potential leading spaces in 'mas outdated' output
+            if [[ "$ig_type" == "mas" ]]; then
+                list_mas=$(echo "$list_mas" | grep -vE "^[[:space:]]*${ig_id}")
+            fi
         done < "$IGNORED_FILE"
     fi
 
@@ -835,6 +860,12 @@ for app_name in ${(k)ghost_apps}; do
 
     # Prevent duplicate checks if mas CLI already detected the update
     if echo "$list_mas" | grep -q "$app_id"; then
+        continue
+    fi
+
+    # Respect ignore list for Ghost Apps too
+    # If user ignored this ID, do not perform manual check
+    if is_ignored "mas" "$app_id"; then
         continue
     fi
 
@@ -1129,46 +1160,55 @@ echo "---"
 echo "Preferences | sfimage=gearshape"
 echo "-- Change Update Frequency | bash='$script_path' param1=change_interval terminal=false refresh=true sfimage=hourglass"
 echo "-- Change Terminal App | bash='$script_path' param1=change_terminal terminal=false refresh=false sfimage=terminal"
-echo "-- Manage Ignored Apps | sfimage=eye.slash"
 
-# Show pinned brew formulae
+# Re-check pinned items to ensure variable is valid in this scope
 pinned_list=$(brew list --pinned 2>/dev/null)
-if [[ -n "$pinned_list" ]]; then
-    echo "---- Pinned Formulae: | color=$COLOR_INFO size=11"
-    echo "$pinned_list" | while read -r name; do
-        echo "----   $name | size=11 font=Monaco"
-        echo "------   Unpin | bash='$script_path' param1=unignore_app param2=brew param3='$name' param4='$name' terminal=false refresh=true sfimage=eye"
-    done
-fi
+has_ignored=false
+[[ -n "$pinned_list" ]] && has_ignored=true
+[[ -s "$IGNORED_FILE" ]] && has_ignored=true
 
-# Show custom ignored apps (casks + mas)
-if [[ -f "$IGNORED_FILE" ]]; then
-    ignored_casks=$(grep "^cask|" "$IGNORED_FILE" 2>/dev/null)
-    ignored_mas=$(grep "^mas|" "$IGNORED_FILE" 2>/dev/null)
+if [[ "$has_ignored" == "true" ]]; then
+    # Parent menu item (Active)
+    echo "-- Manage Ignored Apps | sfimage=eye.slash"
 
-    if [[ -n "$ignored_casks" ]]; then
-        echo "---- Ignored Casks: | color=$COLOR_INFO size=11"
-        echo "$ignored_casks" | while IFS='|' read -r _ cask_name; do
-            echo "----   $cask_name | size=11 font=Monaco"
-            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=cask param3='$cask_name' param4='$cask_name' terminal=false refresh=true sfimage=eye"
+    # List Pinned Brew Formulae
+    if [[ -n "$pinned_list" ]]; then
+        echo "---- Pinned Formulae: | color=$COLOR_INFO size=11"
+        echo "$pinned_list" | while read -r pin_name; do
+             echo "----   $pin_name | size=11 font=Monaco"
+             echo "------   Unpin | bash='$script_path' param1=unignore_app param2=brew param3='$pin_name' param4='$pin_name' terminal=false refresh=true sfimage=eye"
         done
     fi
 
-    if [[ -n "$ignored_mas" ]]; then
-        echo "---- Ignored App Store Apps: | color=$COLOR_INFO size=11"
-        echo "$ignored_mas" | while IFS='|' read -r _ mas_id; do
-            # Get app name from mas list
-            mas_name=$(mas list 2>/dev/null | grep "^$mas_id " | sed -E 's/^[0-9]+[[:space:]]+//' | xargs)
-            [[ -z "$mas_name" ]] && mas_name="ID: $mas_id"
-            echo "----   $mas_name | size=11 font=Monaco"
-            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=mas param3='$mas_id' param4='$mas_name' terminal=false refresh=true sfimage=eye"
-        done
-    fi
-fi
+    # Show custom ignored apps (casks + mas)
+    if [[ -s "$IGNORED_FILE" ]]; then
+        while IFS='|' read -r ig_type ig_id ig_name; do
+            # Sanitize inputs: remove all whitespace/newlines to ensure strict ID matching
+            # This prevents "mas " or " 123" from breaking the unignore command
+            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
+            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
 
-# Show message if nothing is ignored
-if [[ -z "$pinned_list" ]] && { [[ ! -f "$IGNORED_FILE" ]] || [[ ! -s "$IGNORED_FILE" ]]; }; then
-    echo "---- No ignored apps | color=$COLOR_INFO size=11"
+            # Fallback: Use ID if name is missing in file (legacy entries)
+            displayName="${ig_name:-$ig_id}"
+
+            # Trim whitespace from display name for UI aesthetics
+            displayName=$(echo "$displayName" | xargs)
+
+            # Map type to readable label
+            label=""
+            [[ "$ig_type" == "cask" ]] && label="Cask"
+            [[ "$ig_type" == "mas" ]] && label="App Store"
+
+            if [[ -n "$label" ]]; then
+                 echo "---- $label: $displayName | size=11 font=Monaco"
+                 # Pass ONLY cleaned ID and Type to the unignore function
+                 echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
+            fi
+        done < "$IGNORED_FILE"
+    fi
+else
+    # Parent menu item (Disabled/Grayed out)
+    echo "-- Manage Ignored Apps (Empty) | color=#808080 sfimage=eye.slash"
 fi
 
 echo "-----"
