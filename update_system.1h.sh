@@ -827,7 +827,7 @@ if [[ "$1" == "run" ]]; then
 					if grep -qE "^mas\|${app_id}(\||$)" "$IGNORED_FILE" 2>/dev/null; then
 						continue
 					fi
-					mas install "$app_id" || true
+					mas upgrade "$app_id" || true
 				done
 			else
 				# No ignored apps, use faster bulk upgrade
