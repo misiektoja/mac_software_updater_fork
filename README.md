@@ -21,6 +21,10 @@ Mac Software Updater is a targeted automation tool designed to bring order to yo
 1.  **Migration:** Moving manually installed applications under the control of package managers (App Store or Homebrew).
 2.  **Updates:** Monitors updates from the menu bar and applies them via a single terminal command.
 
+> **⚠️ Note to Contributors & Testers**
+>
+> * **Pull Requests:** Please submit all changes to the **`develop`** branch. The `main` branch is reserved for stable releases.
+> * **Upcoming Features:** Want to try the latest version before it's released? Switch to the `develop` branch to see what's next.
 
 ## 🚀 Key Features
 
