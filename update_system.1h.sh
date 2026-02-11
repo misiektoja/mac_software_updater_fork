@@ -731,6 +731,7 @@ if [[ "$1" == "run" ]]; then
 
 		# Parse 'brew outdated' output using ZSH line splitting flag (f)
 		raw_brew_outdated=$(brew outdated --verbose --greedy || true)
+        typeset -a brew_targets
 		for line in "${(@f)raw_brew_outdated}"; do
 			if [[ "$line" == *"("*")"* ]]; then
 				name=${line%% *}
@@ -741,6 +742,13 @@ if [[ "$1" == "run" ]]; then
 				src="brew"
 				[[ "$line" == *"!="* ]] && src="cask"
 
+                # Check if ignored (skip adding to updates)
+                if [[ "$src" == "cask" ]] && is_ignored "cask" "$name"; then
+                     echo "🚫 Skipping ignored cask: $name"
+                     continue
+                fi
+
+                brew_targets+=("$name")
 				update_log_buffer+=("$timestamp|$src|$name|$old_ver|$new_ver")
 				((++count_brew_pending))
 			fi
@@ -786,7 +794,12 @@ if [[ "$1" == "run" ]]; then
 		echo "🍺 Upgrading Homebrew Formulae and Casks ($count_brew_pending pending)..."
 
         # Capture brew upgrade output to detect renamed casks
-        upgrade_output=$(brew upgrade --greedy 2>&1 | tee /dev/tty) || true
+        if [[ ${#brew_targets[@]} -gt 0 ]]; then
+            upgrade_output=$(brew upgrade --greedy "${brew_targets[@]}" 2>&1 | tee /dev/tty) || true
+        else
+            echo "✨ No Homebrew updates to install (ignored apps skipped)."
+            upgrade_output=""
+        fi
 
         # Check for renamed cask pattern and auto-migrate
         if echo "$upgrade_output" | grep -q "was renamed to"; then
@@ -802,7 +815,9 @@ if [[ "$1" == "run" ]]; then
             done
             # Re-run upgrade to catch anything else
             echo "📦 Re-running upgrade after migration..."
-            brew upgrade --greedy || true
+            if [[ ${#brew_targets[@]} -gt 0 ]]; then
+                 brew upgrade --greedy "${brew_targets[@]}" || true
+            fi
         fi
 
 		echo "🧹 Cleaning up..."
