@@ -978,55 +978,54 @@ fi
 
 # MANUAL CHECK FOR GHOST APPS
 # List of applications often missed by mas CLI
-typeset -A ghost_apps
-ghost_apps=(
-    # --- Legacy / Standard Versions ---
-    "Numbers"                         "409203825"
-    "Pages"                           "409201541"
-    "Keynote"                         "409183694"
-    "iMovie"                          "408981434"
-    "GarageBand"                      "682658836"
-    "Xcode"                           "497799835"
-    "Final Cut Pro"                   "424389933"
-    "Logic Pro"                       "634148309"
-    "Motion"                          "434290957"
-    "Compressor"                      "424390742"
-    "MainStage"                       "634159523"
-
-    # --- NEW: Creator Studio Versions (Released Jan 2026) ---
-    "Keynote Creator Studio"          "647829103"
-    "Pages Creator Studio"            "647829104"
-    "Numbers Creator Studio"          "647829105"
-    "Final Cut Pro Creator Studio"    "424389933" # Shares ID but uses separate binary
-    "Logic Pro Creator Studio"        "634148309" # Shares ID but uses separate binary
-)
-
 manual_updates_list=""
 count_manual=0
 
-for app_name in ${(k)ghost_apps}; do
-    app_id=$ghost_apps[$app_name]
+if [[ "$MAS_ENABLED" == "1" ]]; then
+    typeset -A ghost_apps
+    ghost_apps=(
+        # --- Legacy / Standard Versions ---
+        "Numbers"                         "409203825"
+        "Pages"                           "409201541"
+        "Keynote"                         "409183694"
+        "iMovie"                          "408981434"
+        "GarageBand"                      "682658836"
+        "Xcode"                           "497799835"
+        "Final Cut Pro"                   "424389933"
+        "Logic Pro"                       "634148309"
+        "Motion"                          "434290957"
+        "Compressor"                      "424390742"
+        "MainStage"                       "634159523"
 
-    # Skip if Global MAS is disabled
-    if [[ "$MAS_ENABLED" != "1" ]]; then continue; fi
+        # --- NEW: Creator Studio Versions (Released Jan 2026) ---
+        "Keynote Creator Studio"          "647829103"
+        "Pages Creator Studio"            "647829104"
+        "Numbers Creator Studio"          "647829105"
+        "Final Cut Pro Creator Studio"    "424389933" # Shares ID but uses separate binary
+        "Logic Pro Creator Studio"        "634148309" # Shares ID but uses separate binary
+    )
 
-    # Prevent duplicate checks if mas CLI already detected the update
-    if echo "$list_mas" | grep -q "$app_id"; then
-        continue
-    fi
+    for app_name in ${(k)ghost_apps}; do
+        app_id=$ghost_apps[$app_name]
 
-    # Respect ignore list for Ghost Apps too
-    # If user ignored this ID, do not perform manual check
-    if is_ignored "mas" "$app_id"; then
-        continue
-    fi
+        # Prevent duplicate checks if mas CLI already detected the update
+        if echo "$list_mas" | grep -q "$app_id"; then
+            continue
+        fi
 
-    result=$(check_manual_app_version "$app_name" "$app_id")
-    if [[ -n "$result" ]]; then
-        manual_updates_list+="$result"$'\n'
-        ((++count_manual))
-    fi
-done
+        # Respect ignore list for Ghost Apps too
+        # If user ignored this ID, do not perform manual check
+        if is_ignored "mas" "$app_id"; then
+            continue
+        fi
+
+        result=$(check_manual_app_version "$app_name" "$app_id")
+        if [[ -n "$result" ]]; then
+            manual_updates_list+="$result"$'\n'
+            ((++count_manual))
+        fi
+    done
+fi
 
 # Aggregate total updates count
 total=$((count_brew + count_mas + count_manual))
