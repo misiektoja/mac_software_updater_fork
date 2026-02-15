@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.9.6</bitbar.version>
+# <bitbar.version>v1.3.9.7</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -1194,23 +1194,34 @@ fi
 echo "---"
 echo "Monitored: $total_installed items | color=$COLOR_INFO size=12 sfimage=chart.bar.xaxis"
 
+ignored_casks=$(awk -F'|' '$1=="cask"{print $2}' "$IGNORED_FILE" 2>/dev/null | xargs)
+
 # Casks submenu with versions (Truncated to 20 chars)
 # Processes installed Homebrew Casks into a formatted SwiftBar submenu
 # Captures full version strings including spaces by re-evaluating the current line after token extraction
 # Generates interactive menu items with direct links to Homebrew formula pages using safe quote injection
 # Enforces a 20 character limit on version strings to maintain menu readability and consistent layout
+
 echo "-- Apps (Brew Cask): $count_casks | color=$COLOR_INFO size=11 sfimage=square.stack.3d.up"
 if [[ -n "$raw_casks" ]]; then
-    echo "$raw_casks" | awk -v q="'" '{
+    echo "$raw_casks" | awk -v q="'" -v sp="$script_path" -v ign="$ignored_casks" '{
         token=$1;
         $1="";
         ver=$0;
         gsub(/^[ \t]+|[ \t]+$/, "", ver); # Remove redundant spaces
         if (length(ver) > 20) ver = substr(ver, 1, 18) "..";
-        # Safe link in AWK
-        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/cask/" token q " size=11 font=Monaco trim=true"
+
+        is_ignored = (index(" " ign " ", " " token " ") > 0);
+        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
+        action = is_ignored ? "Unignore" : "Ignore";
+        param1 = is_ignored ? "unignore_app" : "ignore_app";
+
+        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/cask/" token q " size=11 font=Monaco trim=true" color_str;
+        print "------ " action " | bash=" q sp q " param1=" param1 " param2=cask param3=" q token q " param4=" q token q " terminal=false refresh=true sfimage=eye";
     }'
 fi
+
+pinned_formulae_list=$(brew list --pinned 2>/dev/null | xargs)
 
 # Brew Formulae
 # Formats installed Homebrew Formulae into a SwiftBar submenu with interactive links.
@@ -1219,15 +1230,26 @@ fi
 # Limits version length to 20 characters for UI consistency.
 echo "-- CLI Tools (Brew Formulae): $count_formulae | color=$COLOR_INFO size=11 sfimage=terminal"
 if [[ -n "$raw_formulae" ]]; then
-    echo "$raw_formulae" | awk -v q="'" '{
+    echo "$raw_formulae" | awk -v q="'" -v sp="$script_path" -v ign="$pinned_formulae_list" '{
         token=$1;
         $1="";
         ver=$0;
         gsub(/^[ \t]+|[ \t]+$/, "", ver);
         if (length(ver) > 20) ver = substr(ver, 1, 18) "..";
-        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/formula/" token q " size=11 font=Monaco trim=true"
+
+        is_ignored = (index(" " ign " ", " " token " ") > 0);
+        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
+
+        action = is_ignored ? "Unignore" : "Ignore";
+
+        param1 = is_ignored ? "unignore_app" : "ignore_app";
+
+        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/formula/" token q " size=11 font=Monaco trim=true" color_str;
+        print "------ " action " | bash=" q sp q " param1=" param1 " param2=brew param3=" q token q " param4=" q token q " terminal=false refresh=true sfimage=eye";
     }'
 fi
+
+ignored_mas=$(awk -F'|' '$1=="mas"{print $2}' "$IGNORED_FILE" 2>/dev/null | xargs)
 
 # App Store
 # Processes installed App Store applications into a formatted SwiftBar submenu with direct store links
@@ -1236,13 +1258,19 @@ fi
 # Ensures proper parameter escaping for interactive menu items using standard web link formats
 echo "-- App Store: $count_mas_installed | color=$COLOR_INFO size=11 sfimage=bag"
 if [[ -n "$installed_mas" ]]; then
-    echo "$installed_mas" | awk -v q="'" '{
+    echo "$installed_mas" | awk -v q="'" -v sp="$script_path" -v ign="$ignored_mas" '{
         id=$1;
         $1="";
         name=$0;
         gsub(/^[ \t]+|[ \t]+$/, "", name); # Remove leading space after ID extraction
-        # Build link: https://apps.apple.com/app/id<NUMER>
-        print "---- " name " | href=" q "https://apps.apple.com/app/id" id q " size=11 font=Monaco trim=true"
+
+        is_ignored = (index(" " ign " ", " " id " ") > 0);
+        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
+        action = is_ignored ? "Unignore" : "Ignore";
+        param1 = is_ignored ? "unignore_app" : "ignore_app";
+
+        print "---- " name " | href=" q "https://apps.apple.com/app/id" id q " size=11 font=Monaco trim=true" color_str;
+        print "------ " action " | bash=" q sp q " param1=" param1 " param2=mas param3=" q id q " param4=" q name q " terminal=false refresh=true sfimage=eye";
     }'
 fi
 
@@ -1278,47 +1306,48 @@ has_ignored=false
 if [[ "$has_ignored" == "true" ]]; then
     # Parent menu item (Active)
     echo "-- Manage Ignored Apps | sfimage=eye.slash"
-
     # List Pinned Brew Formulae
     if [[ -n "$pinned_list" ]]; then
-        echo "---- Pinned Formulae: | color=$COLOR_INFO size=11"
+        echo "---- Formulae (Pinned) | color=$COLOR_INFO size=11"
         echo "$pinned_list" | while read -r pin_name; do
              echo "----   $pin_name | size=11 font=Monaco"
-             echo "------   Unpin | bash='$script_path' param1=unignore_app param2=brew param3='$pin_name' param4='$pin_name' terminal=false refresh=true sfimage=eye"
+             echo "------   Unignore | bash='$script_path' param1=unignore_app param2=brew param3='$pin_name' param4='$pin_name' terminal=false refresh=true sfimage=eye"
         done
     fi
 
     # Show custom ignored apps (casks + mas)
-    if [[ -s "$IGNORED_FILE" ]]; then
-        while IFS='|' read -r ig_type ig_id ig_name; do
+    if [[ -s "$IGNORED_FILE" ]] && grep -q "^cask|" "$IGNORED_FILE"; then
+        echo "---- Casks (Ignored) | color=$COLOR_INFO size=11"
+        grep "^cask|" "$IGNORED_FILE" | while IFS='|' read -r ig_type ig_id ig_name; do
             # Sanitize inputs: remove all whitespace/newlines to ensure strict ID matching
             # This prevents "mas " or " 123" from breaking the unignore command
             ig_type=$(echo "$ig_type" | tr -d '[:space:]')
             ig_id=$(echo "$ig_id" | tr -d '[:space:]')
-
             # Fallback: Use ID if name is missing in file (legacy entries)
             displayName="${ig_name:-$ig_id}"
-
             # Trim whitespace from display name for UI aesthetics
             displayName=$(echo "$displayName" | xargs)
+            echo "----   $displayName | size=11 font=Monaco"
+            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
+        done
+    fi
 
-            # Map type to readable label
-            label=""
-            [[ "$ig_type" == "cask" ]] && label="Cask"
-            [[ "$ig_type" == "mas" ]] && label="App Store"
-
-            if [[ -n "$label" ]]; then
-                 echo "---- $label: $displayName | size=11 font=Monaco"
-                 # Pass ONLY cleaned ID and Type to the unignore function
-                 echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
-            fi
-        done < "$IGNORED_FILE"
+    if [[ -s "$IGNORED_FILE" ]] && grep -q "^mas|" "$IGNORED_FILE"; then
+        echo "---- App Store (Ignored) | color=$COLOR_INFO size=11"
+        grep "^mas|" "$IGNORED_FILE" | while IFS='|' read -r ig_type ig_id ig_name; do
+            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
+            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
+            displayName="${ig_name:-$ig_id}"
+            displayName=$(echo "$displayName" | xargs)
+            echo "----   $displayName | size=11 font=Monaco"
+            # Pass ONLY cleaned ID and Type to the unignore function
+            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
+        done
     fi
 else
     # Parent menu item (Disabled/Grayed out)
     echo "-- Manage Ignored Apps (Empty) | color=#808080 sfimage=eye.slash"
 fi
-
 # Branch selection menu item
 BRANCH_LABEL="Stable"
 BRANCH_ICON="network"
