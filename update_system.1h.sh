@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.9.8</bitbar.version>
+# <bitbar.version>v1.3.9.9</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -45,11 +45,31 @@ IGNORED_FILE="$APP_DIR/ignored_apps.conf"
 mkdir -p "$APP_DIR"
 chmod 700 "$APP_DIR" 2>/dev/null || true
 
+# Validate and load configuration safely
+load_config_safely() {
+    [[ ! -f "$CONFIG_FILE" ]] && return 0
+
+    # Security Hard Fail: Check for command execution characters
+    # Deny: backticks, dollar signs (variables), subshells, backgrounding, pipes
+    if grep -qE '[`$(){}&|]' "$CONFIG_FILE"; then
+        echo "⚠️ Config check failed: Unsafe characters detected. Using defaults."
+        return 1
+    fi
+
+    # Syntax Validation: Ensure EVERY line is valid
+    # Allowed: Empty lines, Comments (#), or KEY="VALUE"
+    # grep -v outputs lines that DO NOT match. If output exists, file is invalid.
+    if grep -vE '^[[:space:]]*($|#|[A-Z_]+="[^"]*")' "$CONFIG_FILE" >/dev/null; then
+         echo "⚠️ Config check failed: Invalid syntax found. Using defaults."
+         return 1
+    fi
+
+    source "$CONFIG_FILE"
+}
+
 # Load configuration
 PREFERRED_TERMINAL="Terminal"  # Default to Apple Terminal
-if [[ -f "$CONFIG_FILE" ]]; then
-    source "$CONFIG_FILE" 2>/dev/null || true
-fi
+load_config_safely || true
 
 # Set default update branch if not configured
 UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
@@ -116,14 +136,33 @@ swiftbar_sq_escape() {
   print -r -- "${1//\'/\'\\\'\'}"
 }
 
+typeset -A IGNORED_APPS_MAP
+
+# Load to memory ignored apps
+load_ignored_cache() {
+    IGNORED_APPS_MAP=()
+    if [[ -f "$IGNORED_FILE" ]]; then
+        # Read type, id AND name
+        while IFS='|' read -r type id name || [[ -n "$type" ]]; do
+            # Key is "type|id"
+            clean_key="${type//[[:space:]]/}|${id//[[:space:]]/}"
+
+            # Value in the map is now the NAME (stripped of newlines)
+            # If name is empty, use ID as fallback
+            clean_name=$(echo "${name:-$id}" | tr -d '\r\n')
+
+            IGNORED_APPS_MAP[$clean_key]="$clean_name"
+        done < "$IGNORED_FILE"
+    fi
+}
+
 # Check if an app is ignored (cask or mas)
 # Usage: is_ignored "type" "identifier"
 is_ignored() {
-    local type="$1" id="$2"
-    # Use grep -E to match ID followed by EOL ($) OR a pipe (|)
-    # This ensures it detects the app even if a name is stored in the 3rd column
-    [[ -f "$IGNORED_FILE" ]] && grep -qE "^${type}\|${id}(\||$)" "$IGNORED_FILE"
+    # Check if key exists in the array (fast)
+    (( ${+IGNORED_APPS_MAP["$1|$2"]} ))
 }
+load_ignored_cache
 
 # Add app to ignore list (Supports: type|id|name)
 add_ignored() {
@@ -147,11 +186,12 @@ remove_ignored() {
 # Launch update script in the configured terminal app
 launch_in_terminal() {
     local script_path="$1"
-    local mode="${2:-all}" # Default to 'all' if not specified
+    shift # Remove first argument (path), rest are parameters
+    local args=("${@:-all}") # Remaining arguments to array (default 'all')
     local terminal="${PREFERRED_TERMINAL:-Terminal}"
 
-    # Build the command to execute
-    local cmd="'$script_path' run $mode"
+    # Build the command: quote script path + run + quote EACH arg separately using (@q)
+    local cmd="${(q)script_path} run ${(@q)args}"
 
     case "$terminal" in
         "iTerm2")
@@ -173,7 +213,8 @@ EOF
             if [[ -d "/Applications/Warp.app" ]]; then
                 # Force focus first
                 osascript -e 'tell application "Warp" to activate'
-                open -a Warp "$script_path" --args run
+                # Warp accepts args naturally, but constructing a clean command string is safer
+                open -a Warp "$script_path" --args run "${args[@]}"
             else
                 # Fallback
                 osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
@@ -195,8 +236,8 @@ EOF
             if [[ -d "/Applications/Ghostty.app" ]]; then
                 # Force focus first
                 osascript -e 'tell application "Ghostty" to activate'
-                # Correctly pass arguments separately to avoid single-string interpretation error
-                open -na Ghostty --args -e "$script_path" "run" "$mode"
+                # Use zsh -c to ensure the quoted command string is parsed correctly
+                open -na Ghostty --args -e zsh -c "$cmd; exec zsh"
             else
                 # Fallback to Terminal
                 osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
@@ -567,9 +608,10 @@ fi
 if [[ "$1" == "update_app" ]]; then
     # Force reload config to ensure latest terminal choice is used
     if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
-    # Use launch_in_terminal with special mode: single <type> <id> <name> <old_ver> <new_ver>
-    # Allow $5 and $6 to be empty strings if version info is missing
-    launch_in_terminal "$0" "single '$2' '$3' '$4' '$5' '$6'"
+
+    # Pass arguments separately so launch_in_terminal quotes them individually
+    # usage: launch_in_terminal path mode type id name old_ver new_ver
+    launch_in_terminal "$0" "single" "$2" "$3" "$4" "$5" "$6"
     exit 0
 fi
 
@@ -934,20 +976,20 @@ if [[ -n "$pinned_formulae" ]]; then
     list_brew=$(echo "$list_brew" | grep -vE "^(${pinned_formulae%|}) ")
 fi
 
-# Filter out ignored CASKS from our custom list
-    if [[ -f "$IGNORED_FILE" ]]; then
-        # Read into _junk to discard the 3rd column (Name)
-        while IFS='|' read -r ig_type ig_id _junk; do
-            # Sanitize inputs: remove all whitespace/newlines
-            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
-            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
-
-            if [[ "$ig_type" == "cask" ]]; then
-                # Filter specific cask from the list (match start of line + ID + space)
-                list_brew=$(echo "$list_brew" | grep -vE "^${ig_id} ")
-            fi
-        done < "$IGNORED_FILE"
+# OPTIMIZED: Filter out ignored CASKS using memory cache (One-pass)
+typeset -a ignored_patterns
+for key in ${(k)IGNORED_APPS_MAP}; do
+    if [[ "$key" == cask\|* ]]; then
+        # Extract ID and append to patterns (match start of line + ID + space)
+        ignored_patterns+=("^${key#cask|} ")
     fi
+done
+
+if [[ ${#ignored_patterns[@]} -gt 0 ]]; then
+    # Join patterns with pipe | to create a single regex: ^id1 |^id2 |^id3
+    # (j:|:) is a Zsh flag to join array elements with |
+    list_brew=$(grep -vE "${(j:|:)ignored_patterns}" <<< "$list_brew" || true)
+fi
 
 count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]' || true)
 
@@ -957,20 +999,19 @@ count_mas=0
 if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
     list_mas=$(mas outdated)
 
-    # Filter out ignored MAS apps
-    if [[ -f "$IGNORED_FILE" ]]; then
-        # Read into _junk to discard the 3rd column (Name) and avoid dirty ID variable
-        while IFS='|' read -r ig_type ig_id _junk; do
-            # Sanitize inputs: remove all whitespace/newlines from type and ID
-            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
-            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
+    # OPTIMIZED: Filter out ignored MAS apps using memory cache
+    typeset -a ignored_mas_patterns
+    for key in ${(k)IGNORED_APPS_MAP}; do
+        if [[ "$key" == mas\|* ]]; then
+            # Match ID at start of line + TRAILING SPACE to avoid partial ID matches
+            # e.g. ensure ID "123" doesn't match "12345"
+            ignored_mas_patterns+=("^[[:space:]]*${key#mas|}[[:space:]]")
+        fi
+    done
 
-            # Use grep -vE with regex to match ID specifically at start of line
-            # ^[[:space:]]* handles potential leading spaces in 'mas outdated' output
-            if [[ "$ig_type" == "mas" ]]; then
-                list_mas=$(echo "$list_mas" | grep -vE "^[[:space:]]*${ig_id}")
-            fi
-        done < "$IGNORED_FILE"
+    if [[ ${#ignored_mas_patterns[@]} -gt 0 ]]; then
+        # Use <<< for safety and || true to prevent exit code 1 if all updates are ignored
+        list_mas=$(grep -vE "${(j:|:)ignored_mas_patterns}" <<< "$list_mas" || true)
     fi
 
     count_mas=$(echo "$list_mas" | grep -E '^[[:space:]]*[0-9]+' | wc -l | tr -d ' ')
@@ -1251,21 +1292,21 @@ fi
 echo "---"
 echo "Monitored: $total_installed items | color=$COLOR_INFO size=12 sfimage=chart.bar.xaxis"
 
-ignored_casks=$(awk -F'|' '$1=="cask"{print $2}' "$IGNORED_FILE" 2>/dev/null | xargs)
+ignored_casks_list=()
+for key in ${(k)IGNORED_APPS_MAP}; do
+    [[ "$key" == cask\|* ]] && ignored_casks_list+=("${key#cask|}")
+done
+ignored_casks="${ignored_casks_list[*]}"
 
 # Casks submenu with versions (Truncated to 20 chars)
-# Processes installed Homebrew Casks into a formatted SwiftBar submenu
-# Captures full version strings including spaces by re-evaluating the current line after token extraction
-# Generates interactive menu items with direct links to Homebrew formula pages using safe quote injection
-# Enforces a 20 character limit on version strings to maintain menu readability and consistent layout
-
 echo "-- Apps (Brew Cask): $count_casks | color=$COLOR_INFO size=11 sfimage=square.stack.3d.up"
 if [[ -n "$raw_casks" ]]; then
+    # Pass ignored_casks generated from memory, not file
     echo "$raw_casks" | awk -v q="'" -v sp="$script_path" -v ign="$ignored_casks" '{
         token=$1;
         $1="";
         ver=$0;
-        gsub(/^[ \t]+|[ \t]+$/, "", ver); # Remove redundant spaces
+        gsub(/^[ \t]+|[ \t]+$/, "", ver);
         if (length(ver) > 20) ver = substr(ver, 1, 18) "..";
 
         is_ignored = (index(" " ign " ", " " token " ") > 0);
@@ -1281,10 +1322,6 @@ fi
 pinned_formulae_list=$(brew list --pinned 2>/dev/null | xargs)
 
 # Brew Formulae
-# Formats installed Homebrew Formulae into a SwiftBar submenu with interactive links.
-# Handles multi-part version strings by clearing the first field and capturing remaining text.
-# Links directly to the Homebrew formula documentation using the package token.
-# Limits version length to 20 characters for UI consistency.
 echo "-- CLI Tools (Brew Formulae): $count_formulae | color=$COLOR_INFO size=11 sfimage=terminal"
 if [[ -n "$raw_formulae" ]]; then
     echo "$raw_formulae" | awk -v q="'" -v sp="$script_path" -v ign="$pinned_formulae_list" '{
@@ -1306,13 +1343,13 @@ if [[ -n "$raw_formulae" ]]; then
     }'
 fi
 
-ignored_mas=$(awk -F'|' '$1=="mas"{print $2}' "$IGNORED_FILE" 2>/dev/null | xargs)
+ignored_mas_list=()
+for key in ${(k)IGNORED_APPS_MAP}; do
+    [[ "$key" == mas\|* ]] && ignored_mas_list+=("${key#mas|}")
+done
+ignored_mas="${ignored_mas_list[*]}"
 
 # App Store
-# Processes installed App Store applications into a formatted SwiftBar submenu with direct store links
-# Extracts numeric application identifiers to construct web URLs for each entry
-# Cleans application names by removing leading identifiers and trimming whitespace for consistent display
-# Ensures proper parameter escaping for interactive menu items using standard web link formats
 if [[ "$MAS_ENABLED" == "1" ]]; then
 	echo "-- App Store: $count_mas_installed | color=$COLOR_INFO size=11 sfimage=bag"
 	if [[ -n "$installed_mas" ]]; then
@@ -1320,7 +1357,7 @@ if [[ "$MAS_ENABLED" == "1" ]]; then
 	        id=$1;
 	        $1="";
 	        name=$0;
-	        gsub(/^[ \t]+|[ \t]+$/, "", name); # Remove leading space after ID extraction
+	        gsub(/^[ \t]+|[ \t]+$/, "", name);
 
 	        is_ignored = (index(" " ign " ", " " id " ") > 0);
 	        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
@@ -1371,11 +1408,13 @@ echo "-- $MAS_LABEL | bash='$script_path' param1=toggle_mas terminal=false refre
 pinned_list=$(brew list --pinned 2>/dev/null)
 has_ignored=false
 [[ -n "$pinned_list" ]] && has_ignored=true
-[[ -s "$IGNORED_FILE" ]] && has_ignored=true
+# Check memory map instead of file size
+[[ ${#IGNORED_APPS_MAP} -gt 0 ]] && has_ignored=true
 
 if [[ "$has_ignored" == "true" ]]; then
     # Parent menu item (Active)
     echo "-- Manage Ignored Apps | sfimage=eye.slash"
+
     # List Pinned Brew Formulae
     if [[ -n "$pinned_list" ]]; then
         echo "---- Formulae (Pinned) | color=$COLOR_INFO size=11"
@@ -1385,36 +1424,46 @@ if [[ "$has_ignored" == "true" ]]; then
         done
     fi
 
-    # Show custom ignored apps (casks + mas)
-    if [[ -s "$IGNORED_FILE" ]] && grep -q "^cask|" "$IGNORED_FILE"; then
+    # OPTIMIZED: Generate Cask and Mas lists from memory map
+    typeset -a sorted_keys
+    sorted_keys=("${(@k)IGNORED_APPS_MAP}")
+    sorted_keys=("${(@o)sorted_keys}")
+
+    local menu_casks=""
+    local menu_mas=""
+
+    for key in "${sorted_keys[@]}"; do
+
+        local ig_type="${key%%|*}"
+        local ig_id="${key#*|}"
+
+        # Get name stored in map value
+        local display_name="${IGNORED_APPS_MAP[$key]}"
+        # Fallback for safety
+        [[ -z "$display_name" ]] && display_name="$ig_id"
+
+        # Single line definition to prevent indentation bugs
+        safe_name=$(swiftbar_sq_escape "$display_name")
+        local item="----   $display_name | size=11 font=Monaco"$'\n'"------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$safe_name' terminal=false refresh=true sfimage=eye"
+
+        if [[ "$ig_type" == "cask" ]]; then
+            menu_casks+="$item"$'\n'
+        elif [[ "$ig_type" == "mas" ]]; then
+            menu_mas+="$item"$'\n'
+        fi
+    done
+
+    # Use echo -n strictly because $item already contains newlines
+    if [[ -n "$menu_casks" ]]; then
         echo "---- Casks (Ignored) | color=$COLOR_INFO size=11"
-        grep "^cask|" "$IGNORED_FILE" | while IFS='|' read -r ig_type ig_id ig_name; do
-            # Sanitize inputs: remove all whitespace/newlines to ensure strict ID matching
-            # This prevents "mas " or " 123" from breaking the unignore command
-            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
-            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
-            # Fallback: Use ID if name is missing in file (legacy entries)
-            displayName="${ig_name:-$ig_id}"
-            # Trim whitespace from display name for UI aesthetics
-            displayName=$(echo "$displayName" | xargs)
-
-            echo "----   $displayName | size=11 font=Monaco"
-            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
-        done
+        echo -n "$menu_casks"
     fi
 
-    if [[ -s "$IGNORED_FILE" ]] && grep -q "^mas|" "$IGNORED_FILE"; then
+    if [[ -n "$menu_mas" ]]; then
         echo "---- App Store (Ignored) | color=$COLOR_INFO size=11"
-        grep "^mas|" "$IGNORED_FILE" | while IFS='|' read -r ig_type ig_id ig_name; do
-            ig_type=$(echo "$ig_type" | tr -d '[:space:]')
-            ig_id=$(echo "$ig_id" | tr -d '[:space:]')
-            displayName="${ig_name:-$ig_id}"
-            displayName=$(echo "$displayName" | xargs)
-            echo "----   $displayName | size=11 font=Monaco"
-            # Pass ONLY cleaned ID and Type to the unignore function
-            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
-        done
+        echo -n "$menu_mas"
     fi
+
 else
     # Parent menu item (Disabled/Grayed out)
     echo "-- Manage Ignored Apps (Empty) | color=#808080 sfimage=eye.slash"
