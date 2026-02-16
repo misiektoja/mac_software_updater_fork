@@ -64,6 +64,9 @@ USER_AGENT="MacSoftwareUpdater/$VERSION"
 PROJECT_URL="https://github.com/pr-fuzzylogic/mac_software_updater"
 PROJECT_URL_CB="https://codeberg.org/pr-fuzzylogic/mac_software_updater"
 
+# MAS_ENABLED: 1 = Enabled (Default), 0 = Disabled
+MAS_ENABLED="${MAS_ENABLED:-1}"
+
 # Colors (Light/Dark mode support)
 # Format: COLOR_LIGHT,COLOR_DARK
 # SwiftBar automatically switches between these based on system theme WITHOUT needing a refresh.
@@ -608,6 +611,38 @@ if [[ "$1" == "unignore_app" ]]; then
     exit 0
 fi
 
+# Toggle App Store Updates
+if [[ "$1" == "toggle_mas" ]]; then
+    # Force reload config
+    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
+
+    CURRENT_STATE="${MAS_ENABLED:-1}"
+
+    if [[ "$CURRENT_STATE" == "1" ]]; then
+        NEW_STATE="0"
+        MSG="App Store updates DISABLED."
+    else
+        NEW_STATE="1"
+        MSG="App Store updates ENABLED."
+    fi
+
+    # Update Config File
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        mkdir -p "$APP_DIR"
+        echo "MAS_ENABLED=\"$NEW_STATE\"" > "$CONFIG_FILE"
+    else
+        if grep -q "^MAS_ENABLED=" "$CONFIG_FILE" 2>/dev/null; then
+            sed -i '' "s/^MAS_ENABLED=.*/MAS_ENABLED=\"$NEW_STATE\"/" "$CONFIG_FILE"
+        else
+            echo "MAS_ENABLED=\"$NEW_STATE\"" >> "$CONFIG_FILE"
+        fi
+    fi
+
+    osascript -e "display dialog \"$MSG\" & return & return & \"The plugin will now refresh to reflect this change.\" buttons {\"OK\"} default button \"OK\" with title \"App Store updates\" with icon note giving up after 5"
+    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+    exit 0
+fi
+
 # About Dialog
 if [[ "$1" == "about_dialog" ]]; then
     #BUTTON=$(osascript -e 'on run {ver}' -e 'tell application "System Events"' -e 'activate' -e 'set myResult to display dialog "Mac Software Updater" & return & "Version " & ver & return & return & "An automated toolkit to monitor and update Homebrew & App Store applications." & return & return & "Created by: pr-fuzzylogic" with title "About" buttons {"Visit Codeberg", "Visit GitHub", "Close"} default button "Close" cancel button "Close" with icon note' -e 'return button returned of myResult' -e 'end tell' -e 'end run' -- "$VERSION")
@@ -659,7 +694,12 @@ if [[ "$1" == "run" ]]; then
                 ;;
             "mas")
                 # Use upgrade instead of install to force update for existing apps
-                mas upgrade "$id"
+                if [[ "$MAS_ENABLED" == "1" ]]; then
+                    mas upgrade "$id"
+                else
+                    echo "❌ Error: App Store updates are disabled."
+                    exit 1
+                fi
                 ;;
         esac
 
@@ -731,6 +771,7 @@ if [[ "$1" == "run" ]]; then
 
 		# Parse 'brew outdated' output using ZSH line splitting flag (f)
 		raw_brew_outdated=$(brew outdated --verbose --greedy || true)
+        typeset -a brew_targets
 		for line in "${(@f)raw_brew_outdated}"; do
 			if [[ "$line" == *"("*")"* ]]; then
 				name=${line%% *}
@@ -741,13 +782,20 @@ if [[ "$1" == "run" ]]; then
 				src="brew"
 				[[ "$line" == *"!="* ]] && src="cask"
 
+                # Check if ignored (skip adding to updates)
+                if [[ "$src" == "cask" ]] && is_ignored "cask" "$name"; then
+                     echo "🚫 Skipping ignored cask: $name"
+                     continue
+                fi
+
+                brew_targets+=("$name")
 				update_log_buffer+=("$timestamp|$src|$name|$old_ver|$new_ver")
 				((++count_brew_pending))
 			fi
 		done
 
 		# Parse 'mas outdated' output
-		if command -v mas &> /dev/null; then
+		if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
 			# Redirect stderr to /dev/null to suppress warnings completely
 			raw_mas_outdated=$(mas outdated 2>/dev/null || true)
 			for line in "${(@f)raw_mas_outdated}"; do
@@ -786,7 +834,12 @@ if [[ "$1" == "run" ]]; then
 		echo "🍺 Upgrading Homebrew Formulae and Casks ($count_brew_pending pending)..."
 
         # Capture brew upgrade output to detect renamed casks
-        upgrade_output=$(brew upgrade --greedy 2>&1 | tee /dev/tty) || true
+        if [[ ${#brew_targets[@]} -gt 0 ]]; then
+            upgrade_output=$(brew upgrade --greedy "${brew_targets[@]}" 2>&1 | tee /dev/tty) || true
+        else
+            echo "✨ No Homebrew updates to install (ignored apps skipped)."
+            upgrade_output=""
+        fi
 
         # Check for renamed cask pattern and auto-migrate
         if echo "$upgrade_output" | grep -q "was renamed to"; then
@@ -802,13 +855,15 @@ if [[ "$1" == "run" ]]; then
             done
             # Re-run upgrade to catch anything else
             echo "📦 Re-running upgrade after migration..."
-            brew upgrade --greedy || true
+            if [[ ${#brew_targets[@]} -gt 0 ]]; then
+                 brew upgrade --greedy "${brew_targets[@]}" || true
+            fi
         fi
 
 		echo "🧹 Cleaning up..."
 		brew cleanup --prune=all
 
-		if command -v mas &> /dev/null; then
+		if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
 			echo "🍎 Updating App Store Applications ($count_mas_pending pending)..."
 
 			# Check if we have any ignored MAS apps
@@ -827,7 +882,7 @@ if [[ "$1" == "run" ]]; then
 					if grep -qE "^mas\|${app_id}(\||$)" "$IGNORED_FILE" 2>/dev/null; then
 						continue
 					fi
-					mas install "$app_id" || true
+					mas upgrade "$app_id" || true
 				done
 			else
 				# No ignored apps, use faster bulk upgrade
@@ -899,7 +954,7 @@ count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]' || true)
 # Check App Store for updates (filter ignored MAS apps)
 list_mas=""
 count_mas=0
-if command -v mas &> /dev/null; then
+if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
     list_mas=$(mas outdated)
 
     # Filter out ignored MAS apps
@@ -923,52 +978,54 @@ fi
 
 # MANUAL CHECK FOR GHOST APPS
 # List of applications often missed by mas CLI
-typeset -A ghost_apps
-ghost_apps=(
-    # --- Legacy / Standard Versions ---
-    "Numbers"                         "409203825"
-    "Pages"                           "409201541"
-    "Keynote"                         "409183694"
-    "iMovie"                          "408981434"
-    "GarageBand"                      "682658836"
-    "Xcode"                           "497799835"
-    "Final Cut Pro"                   "424389933"
-    "Logic Pro"                       "634148309"
-    "Motion"                          "434290957"
-    "Compressor"                      "424390742"
-    "MainStage"                       "634159523"
-
-    # --- NEW: Creator Studio Versions (Released Jan 2026) ---
-    "Keynote Creator Studio"          "647829103"
-    "Pages Creator Studio"            "647829104"
-    "Numbers Creator Studio"          "647829105"
-    "Final Cut Pro Creator Studio"    "424389933" # Shares ID but uses separate binary
-    "Logic Pro Creator Studio"        "634148309" # Shares ID but uses separate binary
-)
-
 manual_updates_list=""
 count_manual=0
 
-for app_name in ${(k)ghost_apps}; do
-    app_id=$ghost_apps[$app_name]
+if [[ "$MAS_ENABLED" == "1" ]]; then
+    typeset -A ghost_apps
+    ghost_apps=(
+        # --- Legacy / Standard Versions ---
+        "Numbers"                         "409203825"
+        "Pages"                           "409201541"
+        "Keynote"                         "409183694"
+        "iMovie"                          "408981434"
+        "GarageBand"                      "682658836"
+        "Xcode"                           "497799835"
+        "Final Cut Pro"                   "424389933"
+        "Logic Pro"                       "634148309"
+        "Motion"                          "434290957"
+        "Compressor"                      "424390742"
+        "MainStage"                       "634159523"
 
-    # Prevent duplicate checks if mas CLI already detected the update
-    if echo "$list_mas" | grep -q "$app_id"; then
-        continue
-    fi
+        # --- NEW: Creator Studio Versions (Released Jan 2026) ---
+        "Keynote Creator Studio"          "647829103"
+        "Pages Creator Studio"            "647829104"
+        "Numbers Creator Studio"          "647829105"
+        "Final Cut Pro Creator Studio"    "424389933" # Shares ID but uses separate binary
+        "Logic Pro Creator Studio"        "634148309" # Shares ID but uses separate binary
+    )
 
-    # Respect ignore list for Ghost Apps too
-    # If user ignored this ID, do not perform manual check
-    if is_ignored "mas" "$app_id"; then
-        continue
-    fi
+    for app_name in ${(k)ghost_apps}; do
+        app_id=$ghost_apps[$app_name]
 
-    result=$(check_manual_app_version "$app_name" "$app_id")
-    if [[ -n "$result" ]]; then
-        manual_updates_list+="$result"$'\n'
-        ((++count_manual))
-    fi
-done
+        # Prevent duplicate checks if mas CLI already detected the update
+        if echo "$list_mas" | grep -q "$app_id"; then
+            continue
+        fi
+
+        # Respect ignore list for Ghost Apps too
+        # If user ignored this ID, do not perform manual check
+        if is_ignored "mas" "$app_id"; then
+            continue
+        fi
+
+        result=$(check_manual_app_version "$app_name" "$app_id")
+        if [[ -n "$result" ]]; then
+            manual_updates_list+="$result"$'\n'
+            ((++count_manual))
+        fi
+    done
+fi
 
 # Aggregate total updates count
 total=$((count_brew + count_mas + count_manual))
@@ -985,7 +1042,7 @@ count_formulae=$(echo -n "$raw_formulae" | grep -c -- '[^[:space:]]' || true)
 # MAS (App Store)
 installed_mas=""
 count_mas_installed=0
-if command -v mas &> /dev/null; then
+if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
     installed_mas=$(mas list)
     count_mas_installed=$(echo "$installed_mas" | wc -l | tr -d ' ')
 fi
@@ -1256,24 +1313,27 @@ ignored_mas=$(awk -F'|' '$1=="mas"{print $2}' "$IGNORED_FILE" 2>/dev/null | xarg
 # Extracts numeric application identifiers to construct web URLs for each entry
 # Cleans application names by removing leading identifiers and trimming whitespace for consistent display
 # Ensures proper parameter escaping for interactive menu items using standard web link formats
-echo "-- App Store: $count_mas_installed | color=$COLOR_INFO size=11 sfimage=bag"
-if [[ -n "$installed_mas" ]]; then
-    echo "$installed_mas" | awk -v q="'" -v sp="$script_path" -v ign="$ignored_mas" '{
-        id=$1;
-        $1="";
-        name=$0;
-        gsub(/^[ \t]+|[ \t]+$/, "", name); # Remove leading space after ID extraction
+if [[ "$MAS_ENABLED" == "1" ]]; then
+	echo "-- App Store: $count_mas_installed | color=$COLOR_INFO size=11 sfimage=bag"
+	if [[ -n "$installed_mas" ]]; then
+	    echo "$installed_mas" | awk -v q="'" -v sp="$script_path" -v ign="$ignored_mas" '{
+	        id=$1;
+	        $1="";
+	        name=$0;
+	        gsub(/^[ \t]+|[ \t]+$/, "", name); # Remove leading space after ID extraction
 
-        is_ignored = (index(" " ign " ", " " id " ") > 0);
-        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
-        action = is_ignored ? "Unignore" : "Ignore";
-        param1 = is_ignored ? "unignore_app" : "ignore_app";
+	        is_ignored = (index(" " ign " ", " " id " ") > 0);
+	        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
+	        action = is_ignored ? "Unignore" : "Ignore";
+	        param1 = is_ignored ? "unignore_app" : "ignore_app";
 
-        print "---- " name " | href=" q "https://apps.apple.com/app/id" id q " size=11 font=Monaco trim=true" color_str;
-        print "------ " action " | bash=" q sp q " param1=" param1 " param2=mas param3=" q id q " param4=" q name q " terminal=false refresh=true sfimage=eye";
-    }'
+	        print "---- " name " | href=" q "https://apps.apple.com/app/id" id q " size=11 font=Monaco trim=true" color_str;
+	        print "------ " action " | bash=" q sp q " param1=" param1 " param2=mas param3=" q id q " param4=" q name q " terminal=false refresh=true sfimage=eye";
+	    }'
+	fi
+else
+    echo "-- App Store: Disabled | color=#808080 size=11"
 fi
-
 echo "History: | color=$COLOR_INFO size=12 sfimage=clock.arrow.circlepath"
 
 # Render the menus
@@ -1296,6 +1356,14 @@ echo "---"
 echo "Preferences | sfimage=gearshape"
 echo "-- Change Update Frequency | bash='$script_path' param1=change_interval terminal=false refresh=true sfimage=hourglass"
 echo "-- Change Terminal App | bash='$script_path' param1=change_terminal terminal=false refresh=false sfimage=terminal"
+
+MAS_ICON="checkmark.circle"
+MAS_LABEL="Disable App Store Updates"
+if [[ "$MAS_ENABLED" != "1" ]]; then
+    MAS_ICON="circle"
+    MAS_LABEL="Enable App Store Updates"
+fi
+echo "-- $MAS_LABEL | bash='$script_path' param1=toggle_mas terminal=false refresh=true sfimage=$MAS_ICON"
 
 # Re-check pinned items to ensure variable is valid in this scope
 pinned_list=$(brew list --pinned 2>/dev/null)
@@ -1327,6 +1395,10 @@ if [[ "$has_ignored" == "true" ]]; then
             displayName="${ig_name:-$ig_id}"
             # Trim whitespace from display name for UI aesthetics
             displayName=$(echo "$displayName" | xargs)
+            # Hide MAS ignored items if globally disabled
+            if [[ "$ig_type" == "mas" && "$MAS_ENABLED" != "1" ]]; then
+                label=""
+            fi
             echo "----   $displayName | size=11 font=Monaco"
             echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
         done
