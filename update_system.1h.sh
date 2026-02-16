@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.9.9</bitbar.version>
+# <bitbar.version>v1.3.9.10</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -116,9 +116,6 @@ MAS_ENABLED="1"
 UPDATE_BRANCH="main"
 load_config_safely
 
-# Set default update branch if not configured
-UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
-
 # Extract version dynamically from the first 5 lines of the script. Needed for User-Agent and About
 VERSION=$(extract_version "$SCRIPT_FILE")
 
@@ -128,9 +125,6 @@ URL_BACKUP_BASE="https://codeberg.org/pr-fuzzylogic/mac_software_updater/raw/bra
 USER_AGENT="MacSoftwareUpdater/$VERSION"
 PROJECT_URL="https://github.com/pr-fuzzylogic/mac_software_updater"
 PROJECT_URL_CB="https://codeberg.org/pr-fuzzylogic/mac_software_updater"
-
-# MAS_ENABLED: 1 = Enabled (Default), 0 = Disabled
-MAS_ENABLED="${MAS_ENABLED:-1}"
 
 # Colors (Light/Dark mode support)
 # Format: COLOR_LIGHT,COLOR_DARK
