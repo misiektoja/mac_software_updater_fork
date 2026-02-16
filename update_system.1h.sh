@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.9.7</bitbar.version>
+# <bitbar.version>v1.3.9.8</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -1357,10 +1357,12 @@ echo "Preferences | sfimage=gearshape"
 echo "-- Change Update Frequency | bash='$script_path' param1=change_interval terminal=false refresh=true sfimage=hourglass"
 echo "-- Change Terminal App | bash='$script_path' param1=change_terminal terminal=false refresh=false sfimage=terminal"
 
-MAS_ICON="checkmark.circle"
-MAS_LABEL="Disable App Store Updates"
-if [[ "$MAS_ENABLED" != "1" ]]; then
-    MAS_ICON="circle"
+# App Store Toggle Logic
+if [[ "$MAS_ENABLED" == "1" ]]; then
+    MAS_ICON="bag.fill"
+    MAS_LABEL="Disable App Store Updates"
+else
+    MAS_ICON="bag"
     MAS_LABEL="Enable App Store Updates"
 fi
 echo "-- $MAS_LABEL | bash='$script_path' param1=toggle_mas terminal=false refresh=true sfimage=$MAS_ICON"
@@ -1395,10 +1397,7 @@ if [[ "$has_ignored" == "true" ]]; then
             displayName="${ig_name:-$ig_id}"
             # Trim whitespace from display name for UI aesthetics
             displayName=$(echo "$displayName" | xargs)
-            # Hide MAS ignored items if globally disabled
-            if [[ "$ig_type" == "mas" && "$MAS_ENABLED" != "1" ]]; then
-                label=""
-            fi
+
             echo "----   $displayName | size=11 font=Monaco"
             echo "------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3='$ig_id' param4='$displayName' terminal=false refresh=true sfimage=eye"
         done
@@ -1421,15 +1420,15 @@ else
     echo "-- Manage Ignored Apps (Empty) | color=#808080 sfimage=eye.slash"
 fi
 # Branch selection menu item
-BRANCH_LABEL="Stable"
+CURRENT_CHANNEL="Stable"
 BRANCH_ICON="network"
 
 if [[ "$UPDATE_BRANCH" == "develop" ]]; then
-    BRANCH_LABEL="Beta (Dev)"
-    BRANCH_ICON="hammer.circle"
+    CURRENT_CHANNEL="Beta/Dev"
+    BRANCH_ICON="hammer.fill"
 fi
 
-echo "-- Channel: $BRANCH_LABEL | bash='$script_path' param1=change_branch terminal=false refresh=true sfimage=$BRANCH_ICON"
+echo "-- Change Channel (Current: $CURRENT_CHANNEL) | bash='$script_path' param1=change_branch terminal=false refresh=true sfimage=$BRANCH_ICON"
 
 echo "-----"
 echo "-- Check for Plugin Update | bash='$script_path' param1=check_updates terminal=false refresh=true sfimage=sparkles"
