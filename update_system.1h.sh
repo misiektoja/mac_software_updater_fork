@@ -45,31 +45,76 @@ IGNORED_FILE="$APP_DIR/ignored_apps.conf"
 mkdir -p "$APP_DIR"
 chmod 700 "$APP_DIR" 2>/dev/null || true
 
+typeset -a CONFIG_WARNINGS
+
+add_config_warning() {
+    local warning="$1"
+    (( ${CONFIG_WARNINGS[(Ie)$warning]} == 0 )) && CONFIG_WARNINGS+=("$warning")
+}
+
 # Validate and load configuration safely
 load_config_safely() {
     [[ ! -f "$CONFIG_FILE" ]] && return 0
 
-    # Security Hard Fail: Check for command execution characters
-    # Deny: backticks, dollar signs (variables), subshells, backgrounding, pipes
-    if grep -qE '[`$(){}&|]' "$CONFIG_FILE"; then
-        echo "⚠️ Config check failed: Unsafe characters detected. Using defaults."
-        return 1
-    fi
+    local raw_line trimmed_line key value line_no=0
 
-    # Syntax Validation: Ensure EVERY line is valid
-    # Allowed: Empty lines, Comments (#), or KEY="VALUE"
-    # grep -v outputs lines that DO NOT match. If output exists, file is invalid.
-    if grep -vE '^[[:space:]]*($|#|[A-Z_]+="[^"]*")' "$CONFIG_FILE" >/dev/null; then
-         echo "⚠️ Config check failed: Invalid syntax found. Using defaults."
-         return 1
-    fi
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+        ((line_no++))
+        trimmed_line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+        trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
 
-    source "$CONFIG_FILE"
+        [[ -z "$trimmed_line" || "$trimmed_line" == \#* ]] && continue
+
+        if ! printf '%s\n' "$trimmed_line" | grep -qE '^[A-Z_]+="[^"]*"$'; then
+            add_config_warning "Invalid config syntax on line $line_no."
+            continue
+        fi
+
+        key="${trimmed_line%%=*}"
+        value="${trimmed_line#*=}"
+        value="${value#\"}"
+        value="${value%\"}"
+
+        case "$key" in
+            "PREFERRED_TERMINAL")
+                case "$value" in
+                    "Terminal"|"iTerm2"|"Warp"|"Alacritty"|"Ghostty")
+                        PREFERRED_TERMINAL="$value"
+                        ;;
+                    *)
+                        add_config_warning "Invalid PREFERRED_TERMINAL value. Using default."
+                        ;;
+                esac
+                ;;
+            "MAS_ENABLED")
+                case "$value" in
+                    "0"|"1")
+                        MAS_ENABLED="$value"
+                        ;;
+                    *)
+                        add_config_warning "Invalid MAS_ENABLED value. Using default."
+                        ;;
+                esac
+                ;;
+            "UPDATE_BRANCH")
+                if printf '%s\n' "$value" | grep -qE '^[A-Za-z0-9._/-]+$'; then
+                    UPDATE_BRANCH="$value"
+                else
+                    add_config_warning "Invalid UPDATE_BRANCH value. Using default."
+                fi
+                ;;
+            *)
+                add_config_warning "Unknown config key '$key' ignored."
+                ;;
+        esac
+    done < "$CONFIG_FILE"
 }
 
 # Load configuration
 PREFERRED_TERMINAL="Terminal"  # Default to Apple Terminal
-load_config_safely || true
+MAS_ENABLED="1"
+UPDATE_BRANCH="main"
+load_config_safely
 
 # Set default update branch if not configured
 UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
@@ -607,7 +652,7 @@ fi
 # Update Single App (launches in user's configured terminal via launch_in_terminal)
 if [[ "$1" == "update_app" ]]; then
     # Force reload config to ensure latest terminal choice is used
-    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
+    load_config_safely
 
     # Pass arguments separately so launch_in_terminal quotes them individually
     # usage: launch_in_terminal path mode type id name old_ver new_ver
@@ -656,7 +701,7 @@ fi
 # Toggle App Store Updates
 if [[ "$1" == "toggle_mas" ]]; then
     # Force reload config
-    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
+    load_config_safely
 
     CURRENT_STATE="${MAS_ENABLED:-1}"
 
@@ -700,7 +745,7 @@ fi
 # Launch Update in Terminal
 if [[ "$1" == "launch_update" ]]; then
     # Force reload config to ensure latest terminal choice is used
-    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
+    load_config_safely
     launch_in_terminal "$0" "$2"
     exit 0
 fi
@@ -1206,6 +1251,14 @@ if [[ $update_available -eq 1 ]]; then
 fi
 
 # Show update details
+if [[ ${#CONFIG_WARNINGS[@]} -gt 0 ]]; then
+    echo "Config Warnings (${#CONFIG_WARNINGS[@]}) | color=$COLOR_WARN size=11 sfimage=exclamationmark.triangle"
+    for warning in "${CONFIG_WARNINGS[@]}"; do
+        echo "-- $warning | color=$COLOR_WARN size=10 trim=true"
+    done
+    echo "---"
+fi
+
 if [[ $total -eq 0 ]]; then
     if [[ $update_available -eq 1 ]]; then
         echo "Local apps are up to date | color=$COLOR_INFO size=10"
