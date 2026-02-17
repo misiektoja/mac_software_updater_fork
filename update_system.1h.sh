@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.0</bitbar.version>
+# <bitbar.version>v1.4.0.1</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -388,6 +388,16 @@ check_manual_app_version() {
             echo "$app_name|$local_ver|$remote_ver|$app_id"
         fi
     fi
+}
+
+
+
+# Helper: Clean App Store Name (Removes leading ID/whitespace and trailing version info)
+clean_mas_name() {
+    # 1. Remove leading ID (digits + space), handling potential leading whitespace (^[[:space:]]*)
+    # 2. Remove trailing version info (last parenthesis group)
+    # 3. Trim whitespace via xargs
+    echo "$1" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//' | sed -E 's/[[:space:]]*\([^)]+\)$//' | xargs
 }
 
 # ==============================================================================
@@ -891,10 +901,8 @@ if [[ "$1" == "run" ]]; then
 				# Uses printf for safety against special chars, greedily removes up to last open paren
 				ver_info=$(printf '%s\n' "$line" | sed -E 's/.*\(//; s/\)$//')
 
-				# Clean Name
-				# Step A: Remove ID at the start (^[0-9]+)
-				# Step B: Remove ONLY the last parentheses group containing the version info (\([^)]+\)$)
-				app_name=$(printf '%s\n' "$line" | sed -E 's/^[0-9]+[[:space:]]+//' | sed -E 's/[[:space:]]*\([^)]+\)$//' | xargs)
+				# Clean Name using shared function
+				app_name=$(clean_mas_name "$line")
 
 				# Split Versions (Old -> New)
 				if [[ "$ver_info" == *"->"* ]]; then
@@ -1159,10 +1167,8 @@ if [[ -f "$HISTORY_FILE" ]]; then
         [[ "$log_src" == "cask" ]] && icon="square.stack.3d.up"
         [[ "$log_src" == "mas" ]] && icon="bag"
 
-        # Clean up log_name for display (fixes corrupted entries like "App (Ver -> Ver)")
-        # Removes everything starting from the first open parenthesis (escaped with backslash)
-        clean_name="${log_name%% \(*}"
-        clean_name="$(echo "$clean_name" | xargs)"
+        # Clean up log_name for display (fixes corrupted entries with IDs or versions)
+        clean_name=$(clean_mas_name "$log_name")
 
         # Truncate versions
         short_old=$(truncate_ver "$log_old")
