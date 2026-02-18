@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.0.3</bitbar.version>
+# <bitbar.version>v1.4.0.4</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -186,12 +186,21 @@ load_ignored_cache() {
     if [[ -f "$IGNORED_FILE" ]]; then
         # Read type, id AND name
         while IFS='|' read -r type id name || [[ -n "$type" ]]; do
-            # Key is "type|id"
-            clean_key="${type//[[:space:]]/}|${id//[[:space:]]/}"
+            # Aggressive cleaning for type keeps only alphanumeric characters
+            # Removes BOM spaces non breaking spaces tabs
+            local clean_type=$(echo "$type" | tr -cd '[:alnum:]')
 
-            # Value in the map is now the NAME (stripped of newlines)
-            # If name is empty, use ID as fallback
-            clean_name=$(echo "${name:-$id}" | tr -d '\r\n')
+            # Aggressive cleaning for ID keeps only digits
+            local clean_id=$(echo "$id" | tr -cd '0-9')
+
+            # Skip invalid lines
+            [[ -z "$clean_type" || -z "$clean_id" ]] && continue
+
+            # Key is type pipe id
+            local clean_key="${clean_type}|${clean_id}"
+
+            # Value in the map is now the NAME stripped of newlines
+            local clean_name=$(echo "${name:-$id}" | tr -d '\r\n')
 
             IGNORED_APPS_MAP[$clean_key]="$clean_name"
         done < "$IGNORED_FILE"
@@ -201,9 +210,10 @@ load_ignored_cache() {
 # Check if an app is ignored (cask or mas)
 # Usage: is_ignored "type" "identifier"
 is_ignored() {
-    # Check if key exists in the array (fast)
-    (( ${+IGNORED_APPS_MAP["$1|$2"]} ))
+    # Check if value exists for key using string test instead of arithmetic
+    [[ -n "${IGNORED_APPS_MAP[$1|$2]}" ]]
 }
+
 load_ignored_cache
 
 # Add app to ignore list (Supports: type|id|name)
