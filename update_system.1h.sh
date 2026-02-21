@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.0.5</bitbar.version>
+# <bitbar.version>v1.4.0.6</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -1317,15 +1317,17 @@ else
         echo "Homebrew ($count_brew): | color=$COLOR_INFO size=12 sfimage=shippingbox"
         echo "$list_brew" | while read -r line; do
             name=${line%% *}
+
+            old_ver_raw=${${line#*\(}%%\)*}
+            new_ver_raw=${line##* }
+            old_ver_clean=$(clean_version "$old_ver_raw")
+            new_ver_clean=$(clean_version "$new_ver_raw")
+
             # Determine type: cask (contains !=) or formula
             if [[ "$line" == *"!="* ]]; then
                 pkg_type="cask"
                 link="https://formulae.brew.sh/cask/$name"
                 # Clean cask display: extract and clean versions (remove commit hashes)
-                old_ver_raw=${${line#*\(}%%\)*}
-                new_ver_raw=${line##* }
-                old_ver_clean=$(clean_version "$old_ver_raw")
-                new_ver_clean=$(clean_version "$new_ver_raw")
                 display_line="$name ($old_ver_clean) != $new_ver_clean"
             else
                 pkg_type="brew"
