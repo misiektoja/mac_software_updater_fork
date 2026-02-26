@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.1</bitbar.version>
+# <bitbar.version>v1.4.1.1</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -252,13 +252,13 @@ launch_in_terminal() {
             if [[ -d "/Applications/iTerm.app" ]]; then
                 osascript <<EOF
 tell application "iTerm"
-    activate
     create window with default profile command "$cmd"
+    activate
 end tell
 EOF
             else
                 # Fallback to Terminal if iTerm2 not found
-                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
             fi
             ;;
         "Warp")
@@ -268,9 +268,10 @@ EOF
                 osascript -e 'tell application "Warp" to activate'
                 # Warp accepts args naturally, but constructing a clean command string is safer
                 open -a Warp "$script_path" --args run "${args[@]}"
+                osascript -e 'tell application "Warp" to activate'
             else
                 # Fallback
-                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
             fi
             ;;
         "Alacritty")
@@ -279,9 +280,10 @@ EOF
                 # Force focus first
                 osascript -e 'tell application "Alacritty" to activate'
                 open -a Alacritty --args -e zsh -c "$cmd; exec zsh"
+                osascript -e 'tell application "Alacritty" to activate'
             else
                 # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
             fi
             ;;
         "Ghostty")
@@ -290,13 +292,11 @@ EOF
                 open -na Ghostty --args -e zsh -c "$cmd; exec zsh"
             else
                 # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
             fi
             ;;
         *)
-            # Default: Apple Terminal
-            # Force focus first
-            osascript -e "tell app \"Terminal\" to activate" -e "tell app \"Terminal\" to do script \"$cmd\""
+            osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
             ;;
     esac
 }
