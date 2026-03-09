@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.1.1</bitbar.version>
+# <bitbar.version>v1.4.1.2</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -242,8 +242,6 @@ launch_in_terminal() {
     local args=("${@:-all}")
     local terminal="${PREFERRED_TERMINAL:-Terminal}"
 
-    # Build the command: quote script path + run + quote EACH arg separately
-    # Utilize single quotes formatting to prevent AppleScript escape sequence failures
     local cmd="${(qq)script_path} run ${(@qq)args}"
 
     case "$terminal" in
@@ -252,13 +250,21 @@ launch_in_terminal() {
             if [[ -d "/Applications/iTerm.app" ]]; then
                 osascript <<EOF
 tell application "iTerm"
+    if not application "iTerm" is running then
+        launch
+    end if
     create window with default profile command "$cmd"
     activate
 end tell
 EOF
             else
-                # Fallback to Terminal if iTerm2 not found
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             fi
             ;;
         "Warp")
@@ -270,8 +276,13 @@ EOF
                 open -a Warp "$script_path" --args run "${args[@]}"
                 osascript -e 'tell application "Warp" to activate'
             else
-                # Fallback
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             fi
             ;;
         "Alacritty")
@@ -282,8 +293,14 @@ EOF
                 open -a Alacritty --args -e zsh -c "$cmd; exec zsh"
                 osascript -e 'tell application "Alacritty" to activate'
             else
-                # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
+			    # Fallback to Terminal
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             fi
             ;;
         "Ghostty")
@@ -291,12 +308,24 @@ EOF
             if [[ -d "/Applications/Ghostty.app" ]]; then
                 open -na Ghostty --args -e zsh -c "$cmd; exec zsh"
             else
-                # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
+			    # Fallback to Terminal
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             fi
             ;;
         *)
-            osascript -e "tell app \"Terminal\" to do script \"$cmd\"" -e "tell app \"Terminal\" to activate"
+            osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             ;;
     esac
 }
@@ -840,8 +869,8 @@ if [[ "$1" == "run" ]]; then
         echo "✅ Update Complete!"
         echo "🔄 Refreshing SwiftBar..."
         open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
-        echo "Done! Press any key to close."
-        read -k1
+        echo "Done!"
+        sleep 1
         exit 0
     fi
 
@@ -865,8 +894,8 @@ if [[ "$1" == "run" ]]; then
                 if [[ "$MODE" == "plugin" ]]; then
                     echo "🔄 Refreshing SwiftBar..."
                     open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
-                    echo "Done! Press any key to close."
-                    read -k1
+                    echo "Done!"
+                    sleep 1
                     exit 0
                 else
                     echo "➡️ Proceeding with system apps..."
@@ -874,7 +903,7 @@ if [[ "$1" == "run" ]]; then
             fi
         elif [[ "$MODE" == "plugin" ]]; then
             echo "ℹ️ No pending plugin updates found."
-            read -k1
+            sleep 1
             exit 0
         fi
     fi
@@ -1041,9 +1070,9 @@ if [[ "$1" == "run" ]]; then
     echo "✅ Update Complete!"
     echo "🔄 Refreshing SwiftBar..."
     open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
-    echo "Done! Press any key to close."
-    read -k1
-    exit
+    echo "Done!"
+    sleep 1
+    exit 0
 fi
 
 # ==============================================================================
