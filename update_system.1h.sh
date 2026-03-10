@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.1.2</bitbar.version>
+# <bitbar.version>v1.4.1.3</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -801,7 +801,10 @@ fi
 
 # About Dialog
 if [[ "$1" == "about_dialog" ]]; then
-    BUTTON=$(osascript -e 'on run {ver}' -e 'tell application "System Events"' -e 'activate' -e 'set myResult to display dialog "Mac Software Updater" & return & "Version " & ver & return & return & "An automated toolkit to monitor and update Homebrew & App Store applications." & return & return & "Created by: pr-fuzzylogic" with title "About" buttons {"Visit Codeberg", "Visit GitHub", "Close"} default button "Close" cancel button "Close" with icon path to resource "Terminal.icns" in bundle (path to application "Terminal")' -e 'return button returned of myResult' -e 'end tell' -e 'end run' -- "$VERSION")
+    TERM_APP="/System/Applications/Utilities/Terminal.app"
+
+    BUTTON=$(osascript -e 'on run {ver, termPath}' -e 'tell application "System Events"' -e 'activate' -e 'set myResult to display dialog "Mac Software Updater" & return & "Version " & ver & return & return & "An automated toolkit to monitor and update Homebrew & App Store applications." & return & return & "Created by: pr-fuzzylogic" with title "About" buttons {"Visit Codeberg", "Visit GitHub", "Close"} default button "Close" cancel button "Close" with icon POSIX file (termPath & "/Contents/Resources/Terminal.icns")' -e 'return button returned of myResult' -e 'end tell' -e 'end run' -- "$VERSION" "$TERM_APP")
+    
     if [[ "$BUTTON" == "Visit GitHub" ]]; then
         open "$PROJECT_URL"
     elif [[ "$BUTTON" == "Visit Codeberg" ]]; then
