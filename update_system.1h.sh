@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.2</bitbar.version>
+# <bitbar.version>v1.4.3</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -503,7 +503,6 @@ check_for_updates_manual() {
 
     if [[ -z "$local_ver" ]]; then
         echo "❌ Critical Error: Could not determine local version."
-        #rm -f "$temp_body" "$temp_headers"
         return 1
     fi
 
@@ -1239,8 +1238,6 @@ fi
 total_installed=$((count_casks + count_formulae + count_mas_installed))
 
 # History Stats
-updates_week=0
-updates_month=0
 count_7d=0
 count_30d=0
 history_7d=""
