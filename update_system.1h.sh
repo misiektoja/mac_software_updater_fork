@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.4.3</bitbar.version>
+# <bitbar.version>v1.4.4</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -940,7 +940,7 @@ if [[ "$1" == "run" ]]; then
 					echo "⚠️ Homebrew update failed. Waiting 5 seconds before retrying..."
 					sleep 5
 				fi
-				((retry_count++))
+				((++retry_count))
 			fi
 		done
 
