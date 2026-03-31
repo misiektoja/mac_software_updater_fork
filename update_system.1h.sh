@@ -201,8 +201,12 @@ load_ignored_cache() {
             # Removes BOM spaces non breaking spaces tabs
             local clean_type=$(echo "$type" | tr -cd '[:alnum:]')
 
-            # Aggressive cleaning for ID keeps only digits
-            local clean_id=$(echo "$id" | tr -cd '0-9')
+            # Clean ID based on type: mas uses digits only, cask/brew use alphanumeric plus hyphens and underscores
+            if [[ "$clean_type" == "mas" ]]; then
+                local clean_id=$(echo "$id" | tr -cd '0-9')
+            else
+                local clean_id=$(echo "$id" | tr -cd '[:alnum:]_-')
+            fi
 
             # Skip invalid lines
             [[ -z "$clean_type" || -z "$clean_id" ]] && continue
