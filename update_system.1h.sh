@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 # <bitbar.title>macOS Software Update & Migration Toolkit</bitbar.title>
-# <bitbar.version>v1.3.8</bitbar.version>
+# <bitbar.version>v1.4.4</bitbar.version>
 # <bitbar.author>pr-fuzzylogic</bitbar.author>
 # <bitbar.author.github>pr-fuzzylogic</bitbar.author.github>
 # <bitbar.desc>Monitors Homebrew and App Store updates, tracks history and stats.</bitbar.desc>
@@ -45,18 +45,86 @@ IGNORED_FILE="$APP_DIR/ignored_apps.conf"
 mkdir -p "$APP_DIR"
 chmod 700 "$APP_DIR" 2>/dev/null || true
 
+typeset -a CONFIG_WARNINGS
+
+add_config_warning() {
+    local warning="$1"
+    (( ${CONFIG_WARNINGS[(Ie)$warning]} == 0 )) && CONFIG_WARNINGS+=("$warning")
+}
+
+# Validate and load configuration safely
+load_config_safely() {
+    [[ ! -f "$CONFIG_FILE" ]] && return 0
+
+    local raw_line trimmed_line key value line_no=0
+
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+        ((line_no++))
+        trimmed_line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+        trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
+
+        [[ -z "$trimmed_line" || "$trimmed_line" == \#* ]] && continue
+
+        if ! printf '%s\n' "$trimmed_line" | grep -qE '^[A-Z_]+="[^"]*"$'; then
+            add_config_warning "Invalid config syntax on line $line_no."
+            continue
+        fi
+
+        key="${trimmed_line%%=*}"
+        value="${trimmed_line#*=}"
+        value="${value#\"}"
+        value="${value%\"}"
+
+        case "$key" in
+            "PREFERRED_TERMINAL")
+                case "$value" in
+                    "Terminal"|"iTerm2"|"Warp"|"Alacritty"|"Ghostty")
+                        PREFERRED_TERMINAL="$value"
+                        ;;
+                    *)
+                        add_config_warning "Invalid PREFERRED_TERMINAL value. Using default."
+                        ;;
+                esac
+                ;;
+            "MAS_ENABLED")
+                case "$value" in
+                    "0"|"1")
+                        MAS_ENABLED="$value"
+                        ;;
+                    *)
+                        add_config_warning "Invalid MAS_ENABLED value. Using default."
+                        ;;
+                esac
+                ;;
+            "UPDATE_BRANCH")
+                if printf '%s\n' "$value" | grep -qE '^[A-Za-z0-9._/-]+$'; then
+                    UPDATE_BRANCH="$value"
+                else
+                    add_config_warning "Invalid UPDATE_BRANCH value. Using default."
+                fi
+                ;;
+            "AUTOSTART")
+                AUTOSTART="$value"
+                ;;
+            *)
+                add_config_warning "Unknown config key '$key' ignored."
+                ;;
+        esac
+    done < "$CONFIG_FILE"
+}
+
 # Load configuration
 PREFERRED_TERMINAL="Terminal"  # Default to Apple Terminal
-if [[ -f "$CONFIG_FILE" ]]; then
-    source "$CONFIG_FILE" 2>/dev/null || true
-fi
+MAS_ENABLED="1"
+UPDATE_BRANCH="main"
+load_config_safely
 
 # Extract version dynamically from the first 5 lines of the script. Needed for User-Agent and About
 VERSION=$(extract_version "$SCRIPT_FILE")
 
 # Failover & Network Config
-URL_PRIMARY_BASE="https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/main"
-URL_BACKUP_BASE="https://codeberg.org/pr-fuzzylogic/mac_software_updater/raw/branch/main"
+URL_PRIMARY_BASE="https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/$UPDATE_BRANCH"
+URL_BACKUP_BASE="https://codeberg.org/pr-fuzzylogic/mac_software_updater/raw/branch/$UPDATE_BRANCH"
 USER_AGENT="MacSoftwareUpdater/$VERSION"
 PROJECT_URL="https://github.com/pr-fuzzylogic/mac_software_updater"
 PROJECT_URL_CB="https://codeberg.org/pr-fuzzylogic/mac_software_updater"
@@ -110,35 +178,71 @@ swiftbar_sq_escape() {
   print -r -- "${1//\'/\'\\\'\'}"
 }
 
-# Check if an app is ignored (cask or mas)
-# Usage: is_ignored "type" "identifier"
-is_ignored() {
-    local type="$1" id="$2"
-    [[ -f "$IGNORED_FILE" ]] && grep -q "^${type}|${id}$" "$IGNORED_FILE"
-}
+typeset -A IGNORED_APPS_MAP
 
-# Add app to ignore list
-add_ignored() {
-    local type="$1" id="$2"
-    if ! is_ignored "$type" "$id"; then
-        echo "${type}|${id}" >> "$IGNORED_FILE"
+# Load to memory ignored apps
+load_ignored_cache() {
+    IGNORED_APPS_MAP=()
+    if [[ -f "$IGNORED_FILE" ]]; then
+        # Read type, id AND name
+        while IFS='|' read -r type id name || [[ -n "$type" ]]; do
+            # Aggressive cleaning for type keeps only alphanumeric characters
+            # Removes BOM spaces non breaking spaces tabs
+            local clean_type=$(echo "$type" | tr -cd '[:alnum:]')
+
+            # Aggressive cleaning for ID keeps only digits
+            local clean_id=$(echo "$id" | tr -cd '0-9')
+
+            # Skip invalid lines
+            [[ -z "$clean_type" || -z "$clean_id" ]] && continue
+
+            # Key is type pipe id
+            local clean_key="${clean_type}|${clean_id}"
+
+            # Value in the map is now the NAME stripped of newlines
+            local clean_name=$(echo "${name:-$id}" | tr -d '\r\n')
+
+            IGNORED_APPS_MAP[$clean_key]="$clean_name"
+        done < "$IGNORED_FILE"
     fi
 }
 
-# Remove app from ignore list
+# Check if an app is ignored (cask or mas)
+# Usage: is_ignored "type" "identifier"
+is_ignored() {
+    # Check if value exists for key using string test instead of arithmetic
+    [[ -n "${IGNORED_APPS_MAP[$1|$2]}" ]]
+}
+
+load_ignored_cache
+
+# Add app to ignore list (Supports: type|id|name)
+add_ignored() {
+    local type="$1" id="$2" name="${3:-$id}"
+    # Remove pipes from name to prevent parsing errors
+    name="${name//|/}"
+    if ! is_ignored "$type" "$id"; then
+        echo "${type}|${id}|${name}" >> "$IGNORED_FILE"
+    fi
+}
+
+# Remove app from ignore list (Matches type|id ONLY)
 remove_ignored() {
-    local type="$1" id="$2"
-    [[ -f "$IGNORED_FILE" ]] && sed -i '' "/^${type}|${id}$/d" "$IGNORED_FILE"
+    local type="$1"
+    local id="$2"
+    # Delete line starting with type|id followed by pipe or EOL
+    # This ensures strict matching of ID regardless of whether a name suffix exists
+    [[ -f "$IGNORED_FILE" ]] && sed -i '' -E "/^${type}\|${id}(\||$)/d" "$IGNORED_FILE"
 }
 
 # Launch update script in the configured terminal app
 launch_in_terminal() {
     local script_path="$1"
-    local mode="${2:-all}" # Default to 'all' if not specified
+    shift
+    local args=("${@:-all}")
     local terminal="${PREFERRED_TERMINAL:-Terminal}"
 
-    # Build the command to execute
-    local cmd="'$script_path' run $mode"
+    local cmd="${(qq)script_path} run ${(@qq)args}"
 
     case "$terminal" in
         "iTerm2")
@@ -146,36 +250,82 @@ launch_in_terminal() {
             if [[ -d "/Applications/iTerm.app" ]]; then
                 osascript <<EOF
 tell application "iTerm"
-    activate
+    if not application "iTerm" is running then
+        launch
+    end if
     create window with default profile command "$cmd"
+    activate
 end tell
 EOF
             else
-                # Fallback to Terminal if iTerm2 not found
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             fi
             ;;
         "Warp")
             # Warp terminal
             if [[ -d "/Applications/Warp.app" ]]; then
-                open -a Warp "$script_path" --args run
+                # Force focus first
+                osascript -e 'tell application "Warp" to activate'
+                # Warp accepts args naturally, but constructing a clean command string is safer
+                open -a Warp "$script_path" --args run "${args[@]}"
+                osascript -e 'tell application "Warp" to activate'
             else
-                # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             fi
             ;;
         "Alacritty")
             # Alacritty terminal
             if [[ -d "/Applications/Alacritty.app" ]]; then
+                # Force focus first
+                osascript -e 'tell application "Alacritty" to activate'
                 open -a Alacritty --args -e zsh -c "$cmd; exec zsh"
+                osascript -e 'tell application "Alacritty" to activate'
             else
-                # Fallback to Terminal
-                osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+			    # Fallback to Terminal
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
+            fi
+            ;;
+        "Ghostty")
+            # Ghostty terminal
+            if [[ -d "/Applications/Ghostty.app" ]]; then
+                open -na Ghostty --args -e zsh -c "$cmd; exec zsh"
+            else
+			    # Fallback to Terminal
+                osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             fi
             ;;
         *)
-            # Default: Apple Terminal
-            osascript -e "tell app \"Terminal\" to do script \"$cmd\""
+            osascript <<EOF
+tell application "Terminal"
+    run
+    do script "$cmd"
+    activate
+end tell
+EOF
             ;;
     esac
 }
@@ -280,6 +430,16 @@ check_manual_app_version() {
     fi
 }
 
+
+
+# Helper: Clean App Store Name (Removes leading ID/whitespace and trailing version info)
+clean_mas_name() {
+    # 1. Remove leading ID (digits + space), handling potential leading whitespace (^[[:space:]]*)
+    # 2. Remove trailing version info (last parenthesis group)
+    # 3. Trim whitespace via xargs
+    echo "$1" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//' | sed -E 's/[[:space:]]*\([^)]+\)$//' | xargs
+}
+
 # ==============================================================================
 # 4. MENU SUB FUNCTIONS
 # ==============================================================================
@@ -330,7 +490,6 @@ check_for_updates_manual() {
     if [[ "$source_verified" != "true" ]]; then
         echo "❌ Error: Update connection to GitHub and Codeberg failed."
         osascript -e "display notification \"Update connection to Github and Codeberg failed.\" with title \"Mac Software Updater\""
-        #rm -f "$temp_headers" "$temp_body"
         return 1
     fi
 
@@ -344,7 +503,6 @@ check_for_updates_manual() {
 
     if [[ -z "$local_ver" ]]; then
         echo "❌ Critical Error: Could not determine local version."
-        #rm -f "$temp_body" "$temp_headers"
         return 1
     fi
 
@@ -392,18 +550,48 @@ if [[ "$1" == "change_interval" ]]; then
         *)          exit 1 ;;
     esac
 
-    DIR=$(dirname "$0")
+    DIR=$(dirname "$SCRIPT_FILE")
     # Clean current name and apply new suffix
     NEW_PATH="$DIR/update_system.${NEW_SUFFIX}.sh"
 
-    if [[ "$0" != "$NEW_PATH" ]]; then
-        mv "$0" "$NEW_PATH" && chmod +x "$NEW_PATH"
+    if [[ "$SCRIPT_FILE" != "$NEW_PATH" ]]; then
+        mv "$SCRIPT_FILE" "$NEW_PATH" && chmod +x "$NEW_PATH"
         osascript -e "display notification \"Update frequency changed to $SELECTION.\" with title \"Mac Software Updater\""
         sleep 2
         open -g "swiftbar://refreshallplugins"
     else
          osascript -e "display notification \"Frequency is already set to $SELECTION.\" with title \"Mac Software Updater\""
     fi
+    exit 0
+fi
+
+# Toggle Autostart (SwiftBar)
+if [[ "$1" == "toggle_autostart" ]]; then
+    # Verify actual system state via AppleScript
+    if osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null | grep -q "SwiftBar"; then
+        osascript -e 'tell application "System Events" to delete login item "SwiftBar"'
+        NEW_STATE="0"
+        MSG="SwiftBar removed from Login Items."
+    else
+        osascript -e 'tell application "System Events" to make login item at end with properties {path:"/Applications/SwiftBar.app", hidden:false}' >/dev/null 2>&1
+        NEW_STATE="1"
+        MSG="SwiftBar added to Login Items."
+    fi
+
+    # Update configuration file to reflect new state
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        mkdir -p "$APP_DIR"
+        echo "AUTOSTART=\"$NEW_STATE\"" > "$CONFIG_FILE"
+    else
+        if grep -q "^AUTOSTART=" "$CONFIG_FILE" 2>/dev/null; then
+            sed -i '' "s/^AUTOSTART=.*/AUTOSTART=\"$NEW_STATE\"/" "$CONFIG_FILE"
+        else
+            echo "AUTOSTART=\"$NEW_STATE\"" >> "$CONFIG_FILE"
+        fi
+    fi
+
+    osascript -e "display notification \"$MSG\" with title \"Mac Software Updater\""
+    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
     exit 0
 fi
 
@@ -416,6 +604,7 @@ if [[ "$1" == "change_terminal" ]]; then
     [[ -d "/Applications/iTerm.app" ]] && available_terminals+=("iTerm2")
     [[ -d "/Applications/Warp.app" ]] && available_terminals+=("Warp")
     [[ -d "/Applications/Alacritty.app" ]] && available_terminals+=("Alacritty")
+    [[ -d "/Applications/Ghostty.app" ]] && available_terminals+=("Ghostty")
 
     # Build AppleScript list
     terminal_list=$(printf '"%s", ' "${available_terminals[@]}" | sed 's/, $//')
@@ -436,7 +625,7 @@ if [[ "$1" == "change_terminal" ]]; then
 # Generated on $(date)
 
 # Terminal app to use for running updates
-# Valid values: Terminal, iTerm2, Warp, Alacritty
+# Valid values: Terminal, iTerm2, Warp, Alacritty, Ghostty
 PREFERRED_TERMINAL="$SELECTION"
 EOF
         chmod 600 "$CONFIG_FILE" 2>/dev/null || true
@@ -458,12 +647,84 @@ EOF
     exit 0
 fi
 
+# Change Update Branch (Stable/Beta)
+if [[ "$1" == "change_branch" ]]; then
+    # Detect current state for default selection
+    CURRENT="${UPDATE_BRANCH:-main}"
+    DEFAULT_ITEM="Stable (Main)"
+    if [[ "$CURRENT" == "develop" ]]; then
+        DEFAULT_ITEM="Beta (Develop)"
+    fi
+
+    # Show selection dialog
+    SELECTION=$(osascript -e "choose from list {\"Stable (Main)\", \"Beta (Develop)\"} with title \"Update Channel\" with prompt \"Select update source:\" default items \"$DEFAULT_ITEM\"")
+
+    if [[ "$SELECTION" == "false" ]]; then
+        exit 0
+    fi
+
+    # Map selection to branch name
+    NEW_BRANCH="main"
+    if [[ "$SELECTION" == "Beta (Develop)" ]]; then
+        NEW_BRANCH="develop"
+    fi
+
+    # Check if change is actually needed
+    if [[ "$NEW_BRANCH" == "$CURRENT" ]]; then
+        osascript -e "display notification \"Already on $SELECTION channel.\" with title \"Mac Software Updater\""
+        exit 0
+    fi
+
+    echo "⚙️ Switching to: $SELECTION..."
+
+    # Update Configuration File
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        mkdir -p "$APP_DIR"
+        echo "UPDATE_BRANCH=\"$NEW_BRANCH\"" > "$CONFIG_FILE"
+    else
+        if grep -q "^UPDATE_BRANCH=" "$CONFIG_FILE" 2>/dev/null; then
+            sed -i '' "s/^UPDATE_BRANCH=.*/UPDATE_BRANCH=\"$NEW_BRANCH\"/" "$CONFIG_FILE"
+        else
+            echo "UPDATE_BRANCH=\"$NEW_BRANCH\"" >> "$CONFIG_FILE"
+        fi
+    fi
+
+    # Update URLs in memory immediately
+    URL_PRIMARY_BASE="https://raw.githubusercontent.com/pr-fuzzylogic/mac_software_updater/$NEW_BRANCH"
+    URL_BACKUP_BASE="https://codeberg.org/pr-fuzzylogic/mac_software_updater/raw/branch/$NEW_BRANCH"
+
+    # Force Download and Overwrite
+    TEMP_TARGET="$(mktemp "${TMPDIR:-/tmp}/update_system.branch_switch.XXXXXX")"
+    trap 'rm -f "$TEMP_TARGET"' EXIT
+
+    echo "⬇️ Downloading version from $NEW_BRANCH..."
+
+    if download_with_failover "update_system.1h.sh" "$TEMP_TARGET"; then
+        if grep -q "bitbar.title" "$TEMP_TARGET"; then
+            mv "$TEMP_TARGET" "$SCRIPT_FILE" && chmod +x "$SCRIPT_FILE"
+
+            # Clean up flags
+            rm -f "$PENDING_FLAG"
+            rm -f "$ETAG_FILE"
+
+            osascript -e "display notification \"Switched to $SELECTION channel.\" with title \"Mac Software Updater\""
+            open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
+        else
+            echo "❌ Error: Downloaded file corrupt."
+            osascript -e "display notification \"Error: Downloaded file corrupt.\" with title \"Mac Software Updater\""
+        fi
+    else
+        echo "❌ Error: Could not download from $NEW_BRANCH."
+        osascript -e "display notification \"Connection failed. Reverting config.\" with title \"Mac Software Updater\""
+        sed -i '' "s/^UPDATE_BRANCH=.*/UPDATE_BRANCH=\"$CURRENT\"/" "$CONFIG_FILE"
+    fi
+    exit 0
+fi
+
 # Update Single App (launches in user's configured terminal via launch_in_terminal)
 if [[ "$1" == "update_app" ]]; then
-    # Force reload config to ensure latest terminal choice is used
-    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
-    # Use launch_in_terminal with special mode: single <type> <id> <name>
-    launch_in_terminal "$0" "single $2 $3 $4"
+    load_config_safely
+    launch_in_terminal "$SCRIPT_FILE" "single" "$2" "$3" "$4" "$5" "$6"
     exit 0
 fi
 
@@ -478,11 +739,11 @@ if [[ "$1" == "ignore_app" ]]; then
             brew pin "$id" 2>/dev/null
             ;;
         "cask"|"mas")
-            add_ignored "$type" "$id"
+            add_ignored "$type" "$id" "$name"
             ;;
     esac
     osascript -e "display dialog \"$name has been ignored.\" & return & return & \"It will no longer appear in the updates list.\" buttons {\"OK\"} default button \"OK\" with title \"App Ignored\" with icon note giving up after 5"
-    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
     exit 0
 fi
 
@@ -501,14 +762,48 @@ if [[ "$1" == "unignore_app" ]]; then
             ;;
     esac
     osascript -e "display dialog \"$name has been restored.\" & return & return & \"It will now appear in the updates list.\" buttons {\"OK\"} default button \"OK\" with title \"App Restored\" with icon note giving up after 5"
-    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
+    exit 0
+fi
+
+# Toggle App Store Updates
+if [[ "$1" == "toggle_mas" ]]; then
+    # Force reload config
+    load_config_safely
+
+    CURRENT_STATE="${MAS_ENABLED:-1}"
+
+    if [[ "$CURRENT_STATE" == "1" ]]; then
+        NEW_STATE="0"
+        MSG="App Store updates DISABLED."
+    else
+        NEW_STATE="1"
+        MSG="App Store updates ENABLED."
+    fi
+
+    # Update Config File
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        mkdir -p "$APP_DIR"
+        echo "MAS_ENABLED=\"$NEW_STATE\"" > "$CONFIG_FILE"
+    else
+        if grep -q "^MAS_ENABLED=" "$CONFIG_FILE" 2>/dev/null; then
+            sed -i '' "s/^MAS_ENABLED=.*/MAS_ENABLED=\"$NEW_STATE\"/" "$CONFIG_FILE"
+        else
+            echo "MAS_ENABLED=\"$NEW_STATE\"" >> "$CONFIG_FILE"
+        fi
+    fi
+
+    osascript -e "display dialog \"$MSG\" & return & return & \"The plugin will now refresh to reflect this change.\" buttons {\"OK\"} default button \"OK\" with title \"App Store updates\" with icon note giving up after 5"
+    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
     exit 0
 fi
 
 # About Dialog
 if [[ "$1" == "about_dialog" ]]; then
-    #BUTTON=$(osascript -e 'on run {ver}' -e 'tell application "System Events"' -e 'activate' -e 'set myResult to display dialog "Mac Software Updater" & return & "Version " & ver & return & return & "An automated toolkit to monitor and update Homebrew & App Store applications." & return & return & "Created by: pr-fuzzylogic" with title "About" buttons {"Visit Codeberg", "Visit GitHub", "Close"} default button "Close" cancel button "Close" with icon note' -e 'return button returned of myResult' -e 'end tell' -e 'end run' -- "$VERSION")
-    BUTTON=$(osascript -e 'on run {ver}' -e 'tell application "System Events"' -e 'activate' -e 'set myResult to display dialog "Mac Software Updater" & return & "Version " & ver & return & return & "An automated toolkit to monitor and update Homebrew & App Store applications." & return & return & "Created by: pr-fuzzylogic" with title "About" buttons {"Visit Codeberg", "Visit GitHub", "Close"} default button "Close" cancel button "Close" with icon path to resource "Terminal.icns" in bundle (path to application "Terminal")' -e 'return button returned of myResult' -e 'end tell' -e 'end run' -- "$VERSION")
+    TERM_APP="/System/Applications/Utilities/Terminal.app"
+
+    BUTTON=$(osascript -e 'on run {ver, termPath}' -e 'tell application "System Events"' -e 'activate' -e 'set myResult to display dialog "Mac Software Updater" & return & "Version " & ver & return & return & "An automated toolkit to monitor and update Homebrew & App Store applications." & return & return & "Created by: pr-fuzzylogic" with title "About" buttons {"Visit Codeberg", "Visit GitHub", "Close"} default button "Close" cancel button "Close" with icon POSIX file (termPath & "/Contents/Resources/Terminal.icns")' -e 'return button returned of myResult' -e 'end tell' -e 'end run' -- "$VERSION" "$TERM_APP")
+
     if [[ "$BUTTON" == "Visit GitHub" ]]; then
         open "$PROJECT_URL"
     elif [[ "$BUTTON" == "Visit Codeberg" ]]; then
@@ -520,15 +815,15 @@ fi
 # Launch Update in Terminal
 if [[ "$1" == "launch_update" ]]; then
     # Force reload config to ensure latest terminal choice is used
-    if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE"; fi
-    launch_in_terminal "$0" "$2"
+    load_config_safely
+    launch_in_terminal "$SCRIPT_FILE" "$2"
     exit 0
 fi
 
 # Manual Update Check
 if [[ "$1" == "check_updates" ]]; then
     check_for_updates_manual
-    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
+    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
     exit 0
 fi
 
@@ -544,25 +839,44 @@ if [[ "$1" == "run" ]]; then
         type="$3"  # brew, cask, or mas
         id="$4"    # package name or app ID
         name="${5:-$id}"  # display name (fallback to id)
+        old_ver="${6:-?}"
+        new_ver="${7:-?}"
 
-        echo "🚀 Updating $name..."
+        echo "🚀 Updating $name ($old_ver -> $new_ver)..."
         echo "---------------------------"
 
         case "$type" in
             "brew"|"cask")
-                brew upgrade "$id"
-                ;;
-            "mas")
-                mas install "$id"
-                ;;
+            brew upgrade "$id"
+            ;;
+        "mas")
+            # Use upgrade instead of install to force update for existing apps
+            if [[ "$MAS_ENABLED" == "1" ]]; then
+                if mas list | awk '{print $1}' | grep -q "^${id}$"; then
+                    mas upgrade "$id" || true
+                else
+                    mas install "$id" || true
+                fi
+            else
+                echo "❌ Error: App Store updates are disabled."
+                exit 1
+            fi
+            ;;
         esac
+
+        # Log update to history
+        timestamp=$(date +%s)
+        # Format: timestamp|source|name|old_ver|new_ver|id
+        if echo "$timestamp|$type|$name|$old_ver|$new_ver|$id" >> "$HISTORY_FILE"; then
+            echo "📝 Added to history log."
+        fi
 
         echo "---------------------------"
         echo "✅ Update Complete!"
         echo "🔄 Refreshing SwiftBar..."
-        open -g "swiftbar://refreshplugin?name=$(basename "$0")"
-        echo "Done! Press any key to close."
-        read -k1
+        open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
+        echo "Done!"
+        sleep 1
         exit 0
     fi
 
@@ -578,16 +892,16 @@ if [[ "$1" == "run" ]]; then
             trap 'rm -f "$TEMP_TARGET"' EXIT
 
             if download_with_failover "update_system.1h.sh" "$TEMP_TARGET"; then
-                mv "$TEMP_TARGET" "$0" && chmod +x "$0"
+                mv "$TEMP_TARGET" "$SCRIPT_FILE" && chmod +x "$SCRIPT_FILE"
                 rm -f "$PENDING_FLAG"
                 echo "✅ Toolkit updated successfully."
 
                 # If only updating plugin, refresh and exit
                 if [[ "$MODE" == "plugin" ]]; then
                     echo "🔄 Refreshing SwiftBar..."
-                    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
-                    echo "Done! Press any key to close."
-                    read -k1
+                    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
+                    echo "Done!"
+                    sleep 1
                     exit 0
                 else
                     echo "➡️ Proceeding with system apps..."
@@ -595,7 +909,7 @@ if [[ "$1" == "run" ]]; then
             fi
         elif [[ "$MODE" == "plugin" ]]; then
             echo "ℹ️ No pending plugin updates found."
-            read -k1
+            sleep 1
             exit 0
         fi
     fi
@@ -607,7 +921,33 @@ if [[ "$1" == "run" ]]; then
 		echo "---------------------------"
 
 		echo "📦 Updating Homebrew Database..."
-		brew update
+		# implement retry loop for homebrew update to prevent lockfile contention
+		local max_retries=6
+		local retry_count=0
+		local update_success=false
+
+		while [[ $retry_count -lt $max_retries ]]; do
+			if update_output=$(brew update 2>&1); then
+				echo "$update_output"
+				update_success=true
+				break
+			else
+				echo "$update_output"
+				if echo "$update_output" | grep -q "Failed to download"; then
+					echo "⚠️ Network error detected. Waiting 10 seconds before retrying..."
+					sleep 10
+				else
+					echo "⚠️ Homebrew update failed. Waiting 5 seconds before retrying..."
+					sleep 5
+				fi
+				((++retry_count))
+			fi
+		done
+
+		if [[ "$update_success" == "false" ]]; then
+			echo "❌ Error: Homebrew update failed after multiple retries."
+			exit 1
+		fi
 
 		# Analyze pending updates to create a snapshot before upgrading
 		echo "🔍 Analyzing pending updates..."
@@ -618,6 +958,7 @@ if [[ "$1" == "run" ]]; then
 
 		# Parse 'brew outdated' output using ZSH line splitting flag (f)
 		raw_brew_outdated=$(brew outdated --verbose --greedy || true)
+        typeset -a brew_targets
 		for line in "${(@f)raw_brew_outdated}"; do
 			if [[ "$line" == *"("*")"* ]]; then
 				name=${line%% *}
@@ -628,13 +969,20 @@ if [[ "$1" == "run" ]]; then
 				src="brew"
 				[[ "$line" == *"!="* ]] && src="cask"
 
+                # Check if ignored (skip adding to updates)
+                if [[ "$src" == "cask" ]] && is_ignored "cask" "$name"; then
+                     echo "🚫 Skipping ignored cask: $name"
+                     continue
+                fi
+
+                brew_targets+=("$name")
 				update_log_buffer+=("$timestamp|$src|$name|$old_ver|$new_ver")
 				((++count_brew_pending))
 			fi
 		done
 
 		# Parse 'mas outdated' output
-		if command -v mas &> /dev/null; then
+		if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
 			# Redirect stderr to /dev/null to suppress warnings completely
 			raw_mas_outdated=$(mas outdated 2>/dev/null || true)
 			for line in "${(@f)raw_mas_outdated}"; do
@@ -645,14 +993,17 @@ if [[ "$1" == "run" ]]; then
 				# Extract ID (First word) - safe string manipulation
 				app_id=${line%% *}
 
+				# Skip ignored apps before adding to log buffer
+				if is_ignored "mas" "$app_id"; then
+					continue
+				fi
+
 				# Extract Version Info (Content inside the LAST parentheses)
 				# Uses printf for safety against special chars, greedily removes up to last open paren
 				ver_info=$(printf '%s\n' "$line" | sed -E 's/.*\(//; s/\)$//')
 
-				# Clean Name
-				# Step A: Remove ID at the start (^[0-9]+)
-				# Step B: Remove ONLY the last parentheses group containing the version info (\([^)]+\)$)
-				app_name=$(printf '%s\n' "$line" | sed -E 's/^[0-9]+[[:space:]]+//' | sed -E 's/[[:space:]]*\([^)]+\)$//' | xargs)
+				# Clean Name using shared function
+				app_name=$(clean_mas_name "$line")
 
 				# Split Versions (Old -> New)
 				if [[ "$ver_info" == *"->"* ]]; then
@@ -664,7 +1015,7 @@ if [[ "$1" == "run" ]]; then
 				fi
 
 				# Add to buffer
-				update_log_buffer+=("$timestamp|mas|$app_name|$old_ver|$new_ver")
+				update_log_buffer+=("$timestamp|mas|$app_name|$old_ver|$new_ver|$app_id")
 				((++count_mas_pending))
 			done
 		fi
@@ -673,7 +1024,12 @@ if [[ "$1" == "run" ]]; then
 		echo "🍺 Upgrading Homebrew Formulae and Casks ($count_brew_pending pending)..."
 
         # Capture brew upgrade output to detect renamed casks
-        upgrade_output=$(brew upgrade --greedy 2>&1 | tee /dev/tty) || true
+        if [[ ${#brew_targets[@]} -gt 0 ]]; then
+            upgrade_output=$(brew upgrade --greedy "${brew_targets[@]}" 2>&1 | tee /dev/tty) || true
+        else
+            echo "✨ No Homebrew updates to install (ignored apps skipped)."
+            upgrade_output=""
+        fi
 
         # Check for renamed cask pattern and auto-migrate
         if echo "$upgrade_output" | grep -q "was renamed to"; then
@@ -689,13 +1045,15 @@ if [[ "$1" == "run" ]]; then
             done
             # Re-run upgrade to catch anything else
             echo "📦 Re-running upgrade after migration..."
-            brew upgrade --greedy || true
+            if [[ ${#brew_targets[@]} -gt 0 ]]; then
+                 brew upgrade --greedy "${brew_targets[@]}" || true
+            fi
         fi
 
 		echo "🧹 Cleaning up..."
 		brew cleanup --prune=all
 
-		if command -v mas &> /dev/null; then
+		if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
 			echo "🍎 Updating App Store Applications ($count_mas_pending pending)..."
 
 			# Check if we have any ignored MAS apps
@@ -711,10 +1069,10 @@ if [[ "$1" == "run" ]]; then
 					[[ ! "$line" =~ ^[[:space:]]*[0-9]+ ]] && continue
 					app_id=${line%% *}
 					# Skip if this app is in our ignore list
-					if grep -q "^mas|${app_id}$" "$IGNORED_FILE" 2>/dev/null; then
+					if grep -qE "^mas\|${app_id}(\||$)" "$IGNORED_FILE" 2>/dev/null; then
 						continue
 					fi
-					mas install "$app_id" || true
+					mas upgrade "$app_id" || true
 				done
 			else
 				# No ignored apps, use faster bulk upgrade
@@ -743,10 +1101,10 @@ if [[ "$1" == "run" ]]; then
     echo "---------------------------"
     echo "✅ Update Complete!"
     echo "🔄 Refreshing SwiftBar..."
-    open -g "swiftbar://refreshplugin?name=$(basename "$0")"
-    echo "Done! Press any key to close."
-    read -k1
-    exit
+    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
+    echo "Done!"
+    sleep 1
+    exit 0
 fi
 
 # ==============================================================================
@@ -766,11 +1124,19 @@ if [[ -n "$pinned_formulae" ]]; then
     list_brew=$(echo "$list_brew" | grep -vE "^(${pinned_formulae%|}) ")
 fi
 
-# Filter out ignored casks from our custom list
-if [[ -f "$IGNORED_FILE" ]]; then
-    while IFS='|' read -r ig_type ig_id; do
-        [[ "$ig_type" == "cask" ]] && list_brew=$(echo "$list_brew" | grep -v "^$ig_id ")
-    done < "$IGNORED_FILE"
+# OPTIMIZED: Filter out ignored CASKS using memory cache (One-pass)
+typeset -a ignored_patterns
+for key in ${(k)IGNORED_APPS_MAP}; do
+    if [[ "$key" == cask\|* ]]; then
+        # Extract ID and append to patterns (match start of line + ID + space)
+        ignored_patterns+=("^${key#cask|} ")
+    fi
+done
+
+if [[ ${#ignored_patterns[@]} -gt 0 ]]; then
+    # Join patterns with pipe | to create a single regex: ^id1 |^id2 |^id3
+    # (j:|:) is a Zsh flag to join array elements with |
+    list_brew=$(grep -vE "${(j:|:)ignored_patterns}" <<< "$list_brew" || true)
 fi
 
 count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]' || true)
@@ -778,14 +1144,22 @@ count_brew=$(echo -n "$list_brew" | grep -c -- '[^[:space:]]' || true)
 # Check App Store for updates (filter ignored MAS apps)
 list_mas=""
 count_mas=0
-if command -v mas &> /dev/null; then
+if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
     list_mas=$(mas outdated)
 
-    # Filter out ignored MAS apps
-    if [[ -f "$IGNORED_FILE" ]]; then
-        while IFS='|' read -r ig_type ig_id; do
-            [[ "$ig_type" == "mas" ]] && list_mas=$(echo "$list_mas" | grep -v "^$ig_id ")
-        done < "$IGNORED_FILE"
+    # OPTIMIZED: Filter out ignored MAS apps using memory cache
+    typeset -a ignored_mas_patterns
+    for key in ${(k)IGNORED_APPS_MAP}; do
+        if [[ "$key" == mas\|* ]]; then
+            # Match ID at start of line + TRAILING SPACE to avoid partial ID matches
+            # e.g. ensure ID "123" doesn't match "12345"
+            ignored_mas_patterns+=("^[[:space:]]*${key#mas|}[[:space:]]")
+        fi
+    done
+
+    if [[ ${#ignored_mas_patterns[@]} -gt 0 ]]; then
+        # Use <<< for safety and || true to prevent exit code 1 if all updates are ignored
+        list_mas=$(grep -vE "${(j:|:)ignored_mas_patterns}" <<< "$list_mas" || true)
     fi
 
     count_mas=$(echo "$list_mas" | grep -E '^[[:space:]]*[0-9]+' | wc -l | tr -d ' ')
@@ -793,46 +1167,54 @@ fi
 
 # MANUAL CHECK FOR GHOST APPS
 # List of applications often missed by mas CLI
-typeset -A ghost_apps
-ghost_apps=(
-    # --- Legacy / Standard Versions ---
-    "Numbers"                         "409203825"
-    "Pages"                           "409201541"
-    "Keynote"                         "409183694"
-    "iMovie"                          "408981434"
-    "GarageBand"                      "682658836"
-    "Xcode"                           "497799835"
-    "Final Cut Pro"                   "424389933"
-    "Logic Pro"                       "634148309"
-    "Motion"                          "434290957"
-    "Compressor"                      "424390742"
-    "MainStage"                       "634159523"
-
-    # --- NEW: Creator Studio Versions (Released Jan 2026) ---
-    "Keynote Creator Studio"          "647829103"
-    "Pages Creator Studio"            "647829104"
-    "Numbers Creator Studio"          "647829105"
-    "Final Cut Pro Creator Studio"    "424389933" # Shares ID but uses separate binary
-    "Logic Pro Creator Studio"        "634148309" # Shares ID but uses separate binary
-)
-
 manual_updates_list=""
 count_manual=0
 
-for app_name in ${(k)ghost_apps}; do
-    app_id=$ghost_apps[$app_name]
+if [[ "$MAS_ENABLED" == "1" ]]; then
+    typeset -A ghost_apps
+    ghost_apps=(
+        "Keynote"                         "361285480"
+        "Pages"                           "361309726"
+        "Numbers"                         "361304891"
+        "Pixelmator Pro"                  "6746662575"
+        "Final Cut Pro"                   "1631624924"
+        "Logic Pro"                       "1615087040"
+        "iMovie"                          "408981434"
+        "GarageBand"                      "682658836"
+        "Xcode"                           "497799835"
+        "Motion"                          "434290957"
+        "Compressor"                      "424390742"
+        "MainStage"                       "634159523"
+    )
 
-    # Prevent duplicate checks if mas CLI already detected the update
-    if echo "$list_mas" | grep -q "$app_id"; then
-        continue
-    fi
+    for app_name in ${(k)ghost_apps}; do
+        app_id=$ghost_apps[$app_name]
 
-    result=$(check_manual_app_version "$app_name" "$app_id")
-    if [[ -n "$result" ]]; then
-        manual_updates_list+="$result"$'\n'
-        ((++count_manual))
-    fi
-done
+        # Prevent duplicate checks if mas CLI already detected the update
+        if echo "$list_mas" | grep -q "$app_id"; then
+            continue
+        fi
+
+        # Respect ignore list for Ghost Apps too
+        # If user ignored this ID, do not perform manual check
+        if is_ignored "mas" "$app_id"; then
+            continue
+        fi
+
+        target_app="$app_name"
+        if [[ -d "/Applications/${app_name} Creator Studio.app" ]]; then
+            target_app="${app_name} Creator Studio"
+        elif [[ ! -d "/Applications/${app_name}.app" ]]; then
+            continue
+        fi
+
+        result=$(check_manual_app_version "$target_app" "$app_id")
+        if [[ -n "$result" ]]; then
+            manual_updates_list+="$result"$'\n'
+            ((++count_manual))
+        fi
+    done
+fi
 
 # Aggregate total updates count
 total=$((count_brew + count_mas + count_manual))
@@ -849,15 +1231,13 @@ count_formulae=$(echo -n "$raw_formulae" | grep -c -- '[^[:space:]]' || true)
 # MAS (App Store)
 installed_mas=""
 count_mas_installed=0
-if command -v mas &> /dev/null; then
+if [[ "$MAS_ENABLED" == "1" ]] && command -v mas &> /dev/null; then
     installed_mas=$(mas list)
     count_mas_installed=$(echo "$installed_mas" | wc -l | tr -d ' ')
 fi
 total_installed=$((count_casks + count_formulae + count_mas_installed))
 
 # History Stats
-updates_week=0
-updates_month=0
 count_7d=0
 count_30d=0
 history_7d=""
@@ -869,7 +1249,7 @@ current_time=$(date +%s)
 
 if [[ -f "$HISTORY_FILE" ]]; then
     # Read file in reverse order (newest first) using sed
-    while IFS='|' read -r log_time log_src log_name log_old log_new; do
+    while IFS='|' read -r log_time log_src log_name log_old log_new log_id; do
 
         # Skip legacy entries, invalid timestamps
         if [[ -z "$log_time" || ! "$log_time" =~ ^[0-9]+$ ]]; then continue; fi
@@ -886,21 +1266,25 @@ if [[ -f "$HISTORY_FILE" ]]; then
         [[ "$log_src" == "cask" ]] && icon="square.stack.3d.up"
         [[ "$log_src" == "mas" ]] && icon="bag"
 
-        # Clean up log_name for display (fixes corrupted entries like "App (Ver -> Ver)")
-        # Removes everything starting from the first open parenthesis (escaped with backslash)
-        clean_name="${log_name%% \(*}"
-        clean_name="$(echo "$clean_name" | xargs)"
+        # Clean up log_name for display (fixes corrupted entries with IDs or versions)
+        clean_name=$(clean_mas_name "$log_name")
 
         # Truncate versions
         short_old=$(truncate_ver "$log_old")
         short_new=$(truncate_ver "$log_new")
         strftime -s log_date_str "%d %b" "$log_time"
-        #log_date_str=$(date -r "$log_time" "+%d.%m")
         local link_param=""
         case "$log_src" in
             "brew") link_param=" href='https://formulae.brew.sh/formula/${log_name}'" ;;
             "cask") link_param=" href='https://formulae.brew.sh/cask/${log_name}'" ;;
-            "mas")  link_param=" href='https://apps.apple.com/search?term=${clean_name// /%20}'" ;;
+            "mas")
+                # Checks if ID exists for backward compatibility
+                if [[ -n "$log_id" ]]; then
+                    link_param=" href='https://apps.apple.com/app/id${log_id}'"
+                else
+                    link_param=" href='https://apps.apple.com/search?term=${clean_name// /%20}'"
+                fi
+                ;;
         esac
 
         # Format date header line
@@ -930,8 +1314,6 @@ if [[ -f "$HISTORY_FILE" ]]; then
             ((++count_30d))
         fi
 
-    #done < <(sed '1!G;h;$!d' "$HISTORY_FILE")
-    # Faster
     done < <(tail -r "$HISTORY_FILE")
 fi
 
@@ -940,7 +1322,7 @@ fi
 # ==============================================================================
 
 # Prepare script path for buttons
-script_path="$(swiftbar_sq_escape "$0")"
+script_path="$(swiftbar_sq_escape "$SCRIPT_FILE")"
 
 # Main Bar Icon
 if [[ $update_available -eq 1 ]]; then
@@ -965,6 +1347,14 @@ if [[ $update_available -eq 1 ]]; then
 fi
 
 # Show update details
+if [[ ${#CONFIG_WARNINGS[@]} -gt 0 ]]; then
+    echo "Config Warnings (${#CONFIG_WARNINGS[@]}) | color=$COLOR_WARN size=11 sfimage=exclamationmark.triangle"
+    for warning in "${CONFIG_WARNINGS[@]}"; do
+        echo "-- $warning | color=$COLOR_WARN size=10 trim=true"
+    done
+    echo "---"
+fi
+
 if [[ $total -eq 0 ]]; then
     if [[ $update_available -eq 1 ]]; then
         echo "Local apps are up to date | color=$COLOR_INFO size=10"
@@ -983,15 +1373,17 @@ else
         echo "Homebrew ($count_brew): | color=$COLOR_INFO size=12 sfimage=shippingbox"
         echo "$list_brew" | while read -r line; do
             name=${line%% *}
+
+            old_ver_raw=${${line#*\(}%%\)*}
+            new_ver_raw=${line##* }
+            old_ver_clean=$(clean_version "$old_ver_raw")
+            new_ver_clean=$(clean_version "$new_ver_raw")
+
             # Determine type: cask (contains !=) or formula
             if [[ "$line" == *"!="* ]]; then
                 pkg_type="cask"
                 link="https://formulae.brew.sh/cask/$name"
                 # Clean cask display: extract and clean versions (remove commit hashes)
-                old_ver_raw=${${line#*\(}%%\)*}
-                new_ver_raw=${line##* }
-                old_ver_clean=$(clean_version "$old_ver_raw")
-                new_ver_clean=$(clean_version "$new_ver_raw")
                 display_line="$name ($old_ver_clean) != $new_ver_clean"
             else
                 pkg_type="brew"
@@ -999,7 +1391,7 @@ else
                 display_line="$line"
             fi
             echo "$display_line | size=12 font=Monaco color=$COLOR_INFO"
-            echo "-- Update $name | bash='$script_path' param1=update_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=arrow.down.circle"
+            echo "-- Update $name | bash='$script_path' param1=update_app param2=$pkg_type param3='$name' param4='$name' param5='$old_ver_clean' param6='$new_ver_clean' terminal=false refresh=true sfimage=arrow.down.circle"
             echo "-- Ignore $name | bash='$script_path' param1=ignore_app param2=$pkg_type param3='$name' param4='$name' terminal=false refresh=true sfimage=eye.slash"
         done
         echo "---"
@@ -1011,21 +1403,35 @@ else
             app_id=${line%% *}
             # Clean display line: remove ID, clean extra spaces
             display_line=$(echo "$line" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//' | sed -E 's/[[:space:]]{2,}/ /g')
+
             # Extract app name (remove version info in parentheses)
             app_name=$(echo "$display_line" | sed -E 's/[[:space:]]*\([^)]+\)$//')
+
+            # Extract versions for history logging
+            # Format usually: Name (OldVer -> NewVer)
+            ver_info=$(echo "$display_line" | sed -E 's/.*\(//; s/\)$//')
+            if [[ "$ver_info" == *"->"* ]]; then
+                old_ver=${ver_info%% ->*}
+                new_ver=${ver_info##*-> }
+            else
+                old_ver="?"
+                new_ver="$ver_info"
+            fi
+
             echo "$display_line | size=12 font=Monaco color=$COLOR_INFO"
-            echo "-- Update $app_name | bash='$script_path' param1=update_app param2=mas param3='$app_id' param4='$app_name' terminal=false refresh=true sfimage=arrow.down.circle"
-            echo "-- Ignore $app_name | bash='$script_path' param1=ignore_app param2=mas param3='$app_id' param4='$app_name' terminal=false refresh=true sfimage=eye.slash"
+            # Added param5 and param6 for version logging
+            echo "-- Update $app_name | bash='$script_path' param1=update_app param2=mas param3=\"$app_id\" param4=\"$app_name\" param5=\"$old_ver\" param6=\"$new_ver\" terminal=false refresh=true sfimage=arrow.down.circle"
+        echo "-- Ignore $app_name | bash='$script_path' param1=ignore_app param2=mas param3=\"$app_id\" param4=\"$app_name\" terminal=false refresh=true sfimage=eye.slash"
         done
     fi
 
     # Manual updates for apps often missed by mas CLI (Ghost Apps)
     if [[ $count_manual -gt 0 ]]; then
         echo "Manual Update Required ($count_manual): | color=$COLOR_WARN size=12 sfimage=exclamationmark.triangle"
-        echo "$manual_updates_list" | while IFS='|' read -r name local remote id; do
+        echo "$manual_updates_list" | while IFS='|' read -r name ver_local ver_remote id; do
             if [[ -n "$name" ]]; then
-                # Link directs to App Store or web, as these are manual
-                echo "Update $name ($local -> $remote) | href='https://apps.apple.com/app/id$id' size=12 font=Monaco color=$COLOR_WARN"
+			    # Link directs to App Store or web, as these are manual
+                echo "-- Update $name ($ver_local -> $ver_remote) | bash='$script_path' param1=update_app param2=mas param3=\"$id\" param4=\"$name\" param5=\"$ver_local\" param6=\"$ver_remote\" terminal=false refresh=true sfimage=arrow.down.circle color=$COLOR_WARN"
             fi
         done
         echo "---"
@@ -1037,58 +1443,85 @@ fi
 echo "---"
 echo "Monitored: $total_installed items | color=$COLOR_INFO size=12 sfimage=chart.bar.xaxis"
 
+ignored_casks_list=()
+for key in ${(k)IGNORED_APPS_MAP}; do
+    [[ "$key" == cask\|* ]] && ignored_casks_list+=("${key#cask|}")
+done
+ignored_casks="${ignored_casks_list[*]}"
+
 # Casks submenu with versions (Truncated to 20 chars)
-# Processes installed Homebrew Casks into a formatted SwiftBar submenu
-# Captures full version strings including spaces by re-evaluating the current line after token extraction
-# Generates interactive menu items with direct links to Homebrew formula pages using safe quote injection
-# Enforces a 20 character limit on version strings to maintain menu readability and consistent layout
 echo "-- Apps (Brew Cask): $count_casks | color=$COLOR_INFO size=11 sfimage=square.stack.3d.up"
 if [[ -n "$raw_casks" ]]; then
-    echo "$raw_casks" | awk -v q="'" '{
-        token=$1;
-        $1="";
-        ver=$0;
-        gsub(/^[ \t]+|[ \t]+$/, "", ver); # Remove redundant spaces
-        if (length(ver) > 20) ver = substr(ver, 1, 18) "..";
-        # Safe link in AWK
-        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/cask/" token q " size=11 font=Monaco trim=true"
-    }'
-fi
-
-# Brew Formulae
-# Formats installed Homebrew Formulae into a SwiftBar submenu with interactive links.
-# Handles multi-part version strings by clearing the first field and capturing remaining text.
-# Links directly to the Homebrew formula documentation using the package token.
-# Limits version length to 20 characters for UI consistency.
-echo "-- CLI Tools (Brew Formulae): $count_formulae | color=$COLOR_INFO size=11 sfimage=terminal"
-if [[ -n "$raw_formulae" ]]; then
-    echo "$raw_formulae" | awk -v q="'" '{
+    # Pass ignored_casks generated from memory, not file
+    echo "$raw_casks" | awk -v q="'" -v sp="$script_path" -v ign="$ignored_casks" '{
         token=$1;
         $1="";
         ver=$0;
         gsub(/^[ \t]+|[ \t]+$/, "", ver);
         if (length(ver) > 20) ver = substr(ver, 1, 18) "..";
-        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/formula/" token q " size=11 font=Monaco trim=true"
+
+        is_ignored = (index(" " ign " ", " " token " ") > 0);
+        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
+        action = is_ignored ? "Unignore" : "Ignore";
+        param1 = is_ignored ? "unignore_app" : "ignore_app";
+
+        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/cask/" token q " size=11 font=Monaco trim=true" color_str;
+        print "------ " action " | bash=" q sp q " param1=" param1 " param2=cask param3=" q token q " param4=" q token q " terminal=false refresh=true sfimage=eye";
     }'
 fi
+
+pinned_formulae_list=$(brew list --pinned 2>/dev/null | xargs)
+
+# Brew Formulae
+echo "-- CLI Tools (Brew Formulae): $count_formulae | color=$COLOR_INFO size=11 sfimage=terminal"
+if [[ -n "$raw_formulae" ]]; then
+    echo "$raw_formulae" | awk -v q="'" -v sp="$script_path" -v ign="$pinned_formulae_list" '{
+        token=$1;
+        $1="";
+        ver=$0;
+        gsub(/^[ \t]+|[ \t]+$/, "", ver);
+        if (length(ver) > 20) ver = substr(ver, 1, 18) "..";
+
+        is_ignored = (index(" " ign " ", " " token " ") > 0);
+        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
+
+        action = is_ignored ? "Unignore" : "Ignore";
+
+        param1 = is_ignored ? "unignore_app" : "ignore_app";
+
+        print "---- " token " (" ver ") | href=" q "https://formulae.brew.sh/formula/" token q " size=11 font=Monaco trim=true" color_str;
+        print "------ " action " | bash=" q sp q " param1=" param1 " param2=brew param3=" q token q " param4=" q token q " terminal=false refresh=true sfimage=eye";
+    }'
+fi
+
+ignored_mas_list=()
+for key in ${(k)IGNORED_APPS_MAP}; do
+    [[ "$key" == mas\|* ]] && ignored_mas_list+=("${key#mas|}")
+done
+ignored_mas="${ignored_mas_list[*]}"
 
 # App Store
-# Processes installed App Store applications into a formatted SwiftBar submenu with direct store links
-# Extracts numeric application identifiers to construct web URLs for each entry
-# Cleans application names by removing leading identifiers and trimming whitespace for consistent display
-# Ensures proper parameter escaping for interactive menu items using standard web link formats
-echo "-- App Store: $count_mas_installed | color=$COLOR_INFO size=11 sfimage=bag"
-if [[ -n "$installed_mas" ]]; then
-    echo "$installed_mas" | awk -v q="'" '{
-        id=$1;
-        $1="";
-        name=$0;
-        gsub(/^[ \t]+|[ \t]+$/, "", name); # Remove leading space after ID extraction
-        # Build link: https://apps.apple.com/app/id<NUMER>
-        print "---- " name " | href=" q "https://apps.apple.com/app/id" id q " size=11 font=Monaco trim=true"
-    }'
-fi
+if [[ "$MAS_ENABLED" == "1" ]]; then
+	echo "-- App Store: $count_mas_installed | color=$COLOR_INFO size=11 sfimage=bag"
+	if [[ -n "$installed_mas" ]]; then
+	    echo "$installed_mas" | awk -v q="'" -v sp="$script_path" -v ign="$ignored_mas" '{
+	        id=$1;
+	        $1="";
+	        name=$0;
+	        gsub(/^[ \t]+|[ \t]+$/, "", name);
 
+	        is_ignored = (index(" " ign " ", " " id " ") > 0);
+	        color_str = is_ignored ? " color=#808080 sfimage=eye.slash" : "";
+	        action = is_ignored ? "Unignore" : "Ignore";
+	        param1 = is_ignored ? "unignore_app" : "ignore_app";
+
+	        print "---- " name " | href=" q "https://apps.apple.com/app/id" id q " size=11 font=Monaco trim=true" color_str;
+	        print "------ " action " | bash=" q sp q " param1=" param1 " param2=mas param3=" q id q " param4=" q name q " terminal=false refresh=true sfimage=eye";
+	    }'
+	fi
+else
+    echo "-- App Store: Disabled | color=#808080 size=11"
+fi
 echo "History: | color=$COLOR_INFO size=12 sfimage=clock.arrow.circlepath"
 
 # Render the menus
@@ -1110,48 +1543,103 @@ echo "Refresh now | refresh=true sfimage=arrow.clockwise"
 echo "---"
 echo "Preferences | sfimage=gearshape"
 echo "-- Change Update Frequency | bash='$script_path' param1=change_interval terminal=false refresh=true sfimage=hourglass"
+
+# Autostart Logic check (Configuration based for performance)
+if [[ "${AUTOSTART:-0}" == "1" ]]; then
+    as_label="Disable Autostart"
+    as_icon="autostartstop.slash"
+else
+    as_label="Enable Autostart"
+    as_icon="autostartstop"
+fi
+echo "-- $as_label | bash='$script_path' param1=toggle_autostart terminal=false refresh=true sfimage=$as_icon"
+
 echo "-- Change Terminal App | bash='$script_path' param1=change_terminal terminal=false refresh=false sfimage=terminal"
-echo "-- Manage Ignored Apps | sfimage=eye.slash"
 
-# Show pinned brew formulae
+# App Store Toggle Logic
+if [[ "$MAS_ENABLED" == "1" ]]; then
+    MAS_ICON="bag.fill"
+    MAS_LABEL="Disable App Store Updates"
+else
+    MAS_ICON="bag"
+    MAS_LABEL="Enable App Store Updates"
+fi
+echo "-- $MAS_LABEL | bash='$script_path' param1=toggle_mas terminal=false refresh=true sfimage=$MAS_ICON"
+
+# Re-check pinned items to ensure variable is valid in this scope
 pinned_list=$(brew list --pinned 2>/dev/null)
-if [[ -n "$pinned_list" ]]; then
-    echo "---- Pinned Formulae: | color=$COLOR_INFO size=11"
-    echo "$pinned_list" | while read -r name; do
-        echo "----   $name | size=11 font=Monaco"
-        echo "------   Unpin | bash='$script_path' param1=unignore_app param2=brew param3='$name' param4='$name' terminal=false refresh=true sfimage=eye"
+has_ignored=false
+[[ -n "$pinned_list" ]] && has_ignored=true
+# Check memory map instead of file size
+[[ ${#IGNORED_APPS_MAP} -gt 0 ]] && has_ignored=true
+
+if [[ "$has_ignored" == "true" ]]; then
+    # Parent menu item (Active)
+    echo "-- Manage Ignored Apps | sfimage=eye.slash"
+
+    # List Pinned Brew Formulae
+    if [[ -n "$pinned_list" ]]; then
+        echo "---- Formulae (Pinned) | color=$COLOR_INFO size=11"
+        echo "$pinned_list" | while read -r pin_name; do
+             echo "----   $pin_name | size=11 font=Monaco"
+             echo "------   Unignore | bash='$script_path' param1=unignore_app param2=brew param3='$pin_name' param4='$pin_name' terminal=false refresh=true sfimage=eye"
+        done
+    fi
+
+    # OPTIMIZED: Generate Cask and Mas lists from memory map
+    typeset -a sorted_keys
+    sorted_keys=("${(@k)IGNORED_APPS_MAP}")
+    sorted_keys=("${(@o)sorted_keys}")
+
+    local menu_casks=""
+    local menu_mas=""
+
+    for key in "${sorted_keys[@]}"; do
+
+        local ig_type="${key%%|*}"
+        local ig_id="${key#*|}"
+
+        # Get name stored in map value
+        local display_name="${IGNORED_APPS_MAP[$key]}"
+        # Fallback for safety
+        [[ -z "$display_name" ]] && display_name="$ig_id"
+
+        # Single line definition to prevent indentation bugs
+        safe_name=$(swiftbar_sq_escape "$display_name")
+        local item="----   $display_name | size=11 font=Monaco"$'\n'"------   Unignore | bash='$script_path' param1=unignore_app param2=$ig_type param3=\"$ig_id\" param4=\"$display_name\" terminal=false refresh=true sfimage=eye"
+
+        if [[ "$ig_type" == "cask" ]]; then
+            menu_casks+="$item"$'\n'
+        elif [[ "$ig_type" == "mas" ]]; then
+            menu_mas+="$item"$'\n'
+        fi
     done
-fi
 
-# Show custom ignored apps (casks + mas)
-if [[ -f "$IGNORED_FILE" ]]; then
-    ignored_casks=$(grep "^cask|" "$IGNORED_FILE" 2>/dev/null)
-    ignored_mas=$(grep "^mas|" "$IGNORED_FILE" 2>/dev/null)
-
-    if [[ -n "$ignored_casks" ]]; then
-        echo "---- Ignored Casks: | color=$COLOR_INFO size=11"
-        echo "$ignored_casks" | while IFS='|' read -r _ cask_name; do
-            echo "----   $cask_name | size=11 font=Monaco"
-            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=cask param3='$cask_name' param4='$cask_name' terminal=false refresh=true sfimage=eye"
-        done
+    # Use echo -n strictly because $item already contains newlines
+    if [[ -n "$menu_casks" ]]; then
+        echo "---- Casks (Ignored) | color=$COLOR_INFO size=11"
+        echo -n "$menu_casks"
     fi
 
-    if [[ -n "$ignored_mas" ]]; then
-        echo "---- Ignored App Store Apps: | color=$COLOR_INFO size=11"
-        echo "$ignored_mas" | while IFS='|' read -r _ mas_id; do
-            # Get app name from mas list
-            mas_name=$(mas list 2>/dev/null | grep "^$mas_id " | sed -E 's/^[0-9]+[[:space:]]+//' | xargs)
-            [[ -z "$mas_name" ]] && mas_name="ID: $mas_id"
-            echo "----   $mas_name | size=11 font=Monaco"
-            echo "------   Unignore | bash='$script_path' param1=unignore_app param2=mas param3='$mas_id' param4='$mas_name' terminal=false refresh=true sfimage=eye"
-        done
+    if [[ -n "$menu_mas" ]]; then
+        echo "---- App Store (Ignored) | color=$COLOR_INFO size=11"
+        echo -n "$menu_mas"
     fi
+
+else
+    # Parent menu item (Disabled/Grayed out)
+    echo "-- Manage Ignored Apps (Empty) | color=#808080 sfimage=eye.slash"
+fi
+# Branch selection menu item
+CURRENT_CHANNEL="Stable"
+BRANCH_ICON="network"
+
+if [[ "$UPDATE_BRANCH" == "develop" ]]; then
+    CURRENT_CHANNEL="Beta/Dev"
+    BRANCH_ICON="hammer.fill"
 fi
 
-# Show message if nothing is ignored
-if [[ -z "$pinned_list" ]] && { [[ ! -f "$IGNORED_FILE" ]] || [[ ! -s "$IGNORED_FILE" ]]; }; then
-    echo "---- No ignored apps | color=$COLOR_INFO size=11"
-fi
+echo "-- Change Channel (Current: $CURRENT_CHANNEL) | bash='$script_path' param1=change_branch terminal=false refresh=true sfimage=$BRANCH_ICON"
 
 echo "-----"
 echo "-- Check for Plugin Update | bash='$script_path' param1=check_updates terminal=false refresh=true sfimage=sparkles"
