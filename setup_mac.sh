@@ -862,6 +862,9 @@ PREFERRED_TERMINAL="$SELECTED_TERMINAL"
 # App Store Updates (1=Enabled, 0=Disabled)
 MAS_ENABLED="$MAS_ENABLED"
 
+# Ghost App Monitoring (1=Enabled, 0=Disabled)
+GHOST_APPS_ENABLED="1"
+
 # Update Channel (main=Stable, develop=Beta)
 UPDATE_BRANCH="main"
 

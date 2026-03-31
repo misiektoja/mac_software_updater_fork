@@ -124,6 +124,7 @@ Manage the plugin behavior directly from the menu.
 | **Self-Update** | Check for updates. The plugin will scan GitHub and Codeberg for its own new versions. |
 | **Update Channel** | Switch between `Stable (Main)` and `Beta (Develop)` releases instantly. |
 | **App Store** | Toggle `mas` integration on/off directly from the menu. |
+| **Ghost App Monitoring** | Enable or disable manual checks for App Store apps that `mas` often misses. |
 
 ## 🛠 Quick Start
 

@@ -96,6 +96,16 @@ load_config_safely() {
                         ;;
                 esac
                 ;;
+            "GHOST_APPS_ENABLED")
+                case "$value" in
+                    "0"|"1")
+                        GHOST_APPS_ENABLED="$value"
+                        ;;
+                    *)
+                        add_config_warning "Invalid GHOST_APPS_ENABLED value. Using default."
+                        ;;
+                esac
+                ;;
             "UPDATE_BRANCH")
                 if printf '%s\n' "$value" | grep -qE '^[A-Za-z0-9._/-]+$'; then
                     UPDATE_BRANCH="$value"
@@ -116,6 +126,7 @@ load_config_safely() {
 # Load configuration
 PREFERRED_TERMINAL="Terminal"  # Default to Apple Terminal
 MAS_ENABLED="1"
+GHOST_APPS_ENABLED="1"
 UPDATE_BRANCH="main"
 load_config_safely
 
@@ -798,6 +809,38 @@ if [[ "$1" == "toggle_mas" ]]; then
     exit 0
 fi
 
+# Toggle Ghost Apps Monitoring
+if [[ "$1" == "toggle_ghost_apps" ]]; then
+    # Force reload config
+    load_config_safely
+
+    CURRENT_STATE="${GHOST_APPS_ENABLED:-1}"
+
+    if [[ "$CURRENT_STATE" == "1" ]]; then
+        NEW_STATE="0"
+        MSG="Ghost app update monitoring DISABLED."
+    else
+        NEW_STATE="1"
+        MSG="Ghost app update monitoring ENABLED."
+    fi
+
+    # Update Config File
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        mkdir -p "$APP_DIR"
+        echo "GHOST_APPS_ENABLED=\"$NEW_STATE\"" > "$CONFIG_FILE"
+    else
+        if grep -q "^GHOST_APPS_ENABLED=" "$CONFIG_FILE" 2>/dev/null; then
+            sed -i '' "s/^GHOST_APPS_ENABLED=.*/GHOST_APPS_ENABLED=\"$NEW_STATE\"/" "$CONFIG_FILE"
+        else
+            echo "GHOST_APPS_ENABLED=\"$NEW_STATE\"" >> "$CONFIG_FILE"
+        fi
+    fi
+
+    osascript -e "display dialog \"$MSG\" & return & return & \"The plugin will now refresh to reflect this change.\" buttons {\"OK\"} default button \"OK\" with title \"Ghost app monitoring\" with icon note giving up after 5"
+    open -g "swiftbar://refreshplugin?name=$(basename "$SCRIPT_FILE")"
+    exit 0
+fi
+
 # About Dialog
 if [[ "$1" == "about_dialog" ]]; then
     TERM_APP="/System/Applications/Utilities/Terminal.app"
@@ -1170,7 +1213,7 @@ fi
 manual_updates_list=""
 count_manual=0
 
-if [[ "$MAS_ENABLED" == "1" ]]; then
+if [[ "$MAS_ENABLED" == "1" && "$GHOST_APPS_ENABLED" == "1" ]]; then
     typeset -A ghost_apps
     ghost_apps=(
         "Keynote"                         "361285480"
@@ -1565,6 +1608,16 @@ else
     MAS_LABEL="Enable App Store Updates"
 fi
 echo "-- $MAS_LABEL | bash='$script_path' param1=toggle_mas terminal=false refresh=true sfimage=$MAS_ICON"
+
+# Ghost Apps Toggle Logic
+if [[ "$GHOST_APPS_ENABLED" == "1" ]]; then
+    GHOST_ICON="binoculars.fill"
+    GHOST_LABEL="Disable Ghost App Monitoring"
+else
+    GHOST_ICON="binoculars"
+    GHOST_LABEL="Enable Ghost App Monitoring"
+fi
+echo "-- $GHOST_LABEL | bash='$script_path' param1=toggle_ghost_apps terminal=false refresh=true sfimage=$GHOST_ICON"
 
 # Re-check pinned items to ensure variable is valid in this scope
 pinned_list=$(brew list --pinned 2>/dev/null)
